@@ -69,6 +69,22 @@ MESSAGE_PREFIX=
 MAX_FILE_SIZE_MB=50
 SEND_DELAY_MS=1500
 LOG_LEVEL=info
+# For WhatsApp channels/newsletters: "document" (default) or "native"
+NEWSLETTER_MEDIA_MODE=document
+# Telegram polling fallback (helps when some channels are missed by event updates)
+TELEGRAM_POLLING_ENABLED=true
+TELEGRAM_POLL_INTERVAL_MS=15000
+# Send Telegram source link as extra text for media messages (recommended for newsletter media issues)
+WHATSAPP_SEND_SOURCE_LINK=true
+# Indonesian translation (LibreTranslate)
+TRANSLATE_TO_ID=true
+LIBRETRANSLATE_URL=http://127.0.0.1:5000/translate
+TRANSLATE_SOURCE=auto
+TRANSLATE_TARGET=id
+TRANSLATION_PREFIX=id
+TRANSLATION_TIMEOUT_MS=8000
+# If message has no raw text, translate caption as fallback
+TRANSLATE_USE_CAPTION_WHEN_EMPTY=true
 ```
 
 ---
@@ -120,6 +136,8 @@ npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
 npm start
 ```
 
+> Jika `TRANSLATE_TO_ID=true`, command ini juga otomatis menyalakan LibreTranslate lokal lewat virtualenv `.venv-libretranslate` (tanpa `pip install` global).
+
 ### Telegram
 You will be prompted for:
 1. Your **verification code** (sent via SMS or Telegram app)
@@ -142,13 +160,17 @@ npm install -g pm2
 npm run start:pm2
 ```
 
+Perintah PM2 di atas akan menjalankan **2 proses**:
+- `tg-wa-translator` (LibreTranslate)
+- `tg-wa-forwarder` (Telegram → WhatsApp bridge)
+
 Useful commands:
 
 ```bash
 pm2 list                          # see all processes
-pm2 logs tg-wa-forwarder          # stream live logs
-pm2 restart tg-wa-forwarder       # restart
-pm2 stop tg-wa-forwarder          # stop
+pm2 logs tg-wa-forwarder tg-wa-translator   # stream live logs
+pm2 restart tg-wa-forwarder tg-wa-translator # restart
+pm2 stop tg-wa-forwarder tg-wa-translator    # stop
 ```
 
 Auto-start on reboot:
@@ -225,3 +247,29 @@ pm2 save
 ## License
 
 GPL-3.0 © [abyn365](https://github.com/abyn365)
+
+---
+
+## 10 · Translation (LibreTranslate)
+
+Run LibreTranslate locally:
+
+```bash
+python3 -m venv .venv-libretranslate
+source .venv-libretranslate/bin/activate
+pip install libretranslate
+libretranslate --host 0.0.0.0 --port 5000
+```
+
+Untuk Ubuntu/Debian dengan error `externally-managed-environment`, **jangan** install global via `pip install libretranslate`; gunakan virtualenv seperti di atas (atau biarkan `npm start`/PM2 yang membuat virtualenv otomatis).
+
+Jika venv gagal dibuat, install paket sistem: `apt install python3-venv`.
+
+Quick API check:
+
+```bash
+curl -X POST http://localhost:5000/translate \
+  -d q="Hello" \
+  -d source=en \
+  -d target=id
+```
