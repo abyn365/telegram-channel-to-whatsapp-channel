@@ -16,6 +16,34 @@ const TEXT_ONLY_TYPES = new Set(['text', 'webpage', 'poll', 'location', 'contact
 
 const SEND_DELAY_MS = parseInt(process.env.SEND_DELAY_MS, 10) || 1500;
 
+
+const sentSourceKeys = new Set();
+
+function buildSourceDedupKey(message, targetId) {
+    const peer = String(message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || 'unknown');
+    if (message.groupedId) {
+        return `${targetId}::${peer}::grouped::${message.groupedId}`;
+    }
+    return `${targetId}::${peer}::single::${message.id || 'unknown'}`;
+}
+
+function shouldSendSourceFallback(message, targetId) {
+    const key = buildSourceDedupKey(message, targetId);
+    if (sentSourceKeys.has(key)) {
+        return false;
+    }
+
+    sentSourceKeys.add(key);
+    if (sentSourceKeys.size > 20000) {
+        const stale = [...sentSourceKeys].slice(0, 2000);
+        for (const item of stale) {
+            sentSourceKeys.delete(item);
+        }
+    }
+
+    return true;
+}
+
 function buildSourceFallbackText(captionText, sourceLink, mediaType) {
     const parts = [];
     if (captionText && captionText.trim()) {
@@ -95,7 +123,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
             await sendMessage(whatsappSock, targetId, payload);
 
             const sendLinkFallback = String(process.env.WHATSAPP_SEND_SOURCE_LINK || 'true').toLowerCase() !== 'false';
-            if (sendLinkFallback && filePath && sourceLink) {
+            if (sendLinkFallback && filePath && sourceLink && shouldSendSourceFallback(message, targetId)) {
                 const fallbackText = buildSourceFallbackText(payload.text, sourceLink, mediaType);
                 if (fallbackText) {
                     await sendMessage(whatsappSock, targetId, {
