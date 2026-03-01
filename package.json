@@ -1,14 +1,14 @@
 {
   "name": "telegram-channel-to-whatsapp-channel",
   "version": "1.0.0",
-  "description": "Userbot that forwards Telegram channel updates to a WhatsApp channel — supports text, images, videos, audio, documents, stickers, polls, locations, and more.",
+  "description": "Userbot that forwards Telegram channel updates to a WhatsApp channel \u2014 supports text, images, videos, audio, documents, stickers, polls, locations, and more.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "bash scripts/start.sh",
     "start:pm2": "pm2 start ecosystem.config.js",
-    "stop:pm2": "pm2 stop tg-wa-forwarder",
-    "restart:pm2": "pm2 restart tg-wa-forwarder",
-    "logs:pm2": "pm2 logs tg-wa-forwarder",
+    "stop:pm2": "pm2 stop tg-wa-forwarder tg-wa-translator",
+    "restart:pm2": "pm2 restart tg-wa-forwarder tg-wa-translator",
+    "logs:pm2": "pm2 logs tg-wa-forwarder tg-wa-translator",
     "list-chats": "node src/listChats.js",
     "follow-channel": "node src/followChannel.js",
     "test": "echo \"No tests defined\" && exit 0"

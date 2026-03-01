@@ -114,7 +114,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         const sourceLink = await buildTelegramMessageLink(telegramClient, message);
         const payload = buildPayload(message, filePath, channelTitle, senderInfo);
 
-        const translated = await translateToIndonesian(payload.rawText || '');
+        const translated = await translateToIndonesian(payload.rawText || '', payload.text || '');
         if (translated) {
             payload.text = appendTranslation(payload.text, translated);
         }
