@@ -7,3 +7,4 @@ logs/*
 temp/*
 !temp/.gitkeep
 *.session
+.venv-libretranslate/

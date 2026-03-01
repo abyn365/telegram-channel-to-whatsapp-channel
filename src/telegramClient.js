@@ -202,7 +202,7 @@ async function buildTelegramMessageLink(client, message) {
 }
 
 function extractText(message) {
-    return message.message || '';
+    return message.message || message.text || '';
 }
 
 function extractWebPageUrl(message) {
