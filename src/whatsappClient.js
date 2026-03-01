@@ -210,6 +210,12 @@ async function resolveNewsletterJid(sock, targetId) {
     const inviteCode = extractInviteCode(targetId);
     if (!inviteCode) return normalizedId;
 
+    // If newsletterMetadata is not available, return normalized ID directly
+    if (typeof sock.newsletterMetadata !== 'function') {
+        logger.debug(`newsletterMetadata not available, using normalized ID: ${normalizedId}`);
+        return normalizedId;
+    }
+
     try {
         const metadata = await sock.newsletterMetadata('invite', inviteCode);
         if (metadata?.id) {
@@ -218,7 +224,13 @@ async function resolveNewsletterJid(sock, targetId) {
             return jid;
         }
     } catch (err) {
-        logger.debug(`Could not resolve newsletter invite code ${inviteCode}: ${err.message}`);
+        // Handle GraphQL errors gracefully - these are common with newer Baileys versions
+        if (err.message?.includes('GraphQL')) {
+            logger.debug(`GraphQL error when resolving newsletter ${inviteCode}: ${err.message}`);
+            logger.debug(`Falling back to constructed JID: ${inviteCode}@newsletter`);
+        } else {
+            logger.debug(`Could not resolve newsletter invite code ${inviteCode}: ${err.message}`);
+        }
     }
 
     return normalizedId;
@@ -332,6 +344,12 @@ async function checkNewsletterAccess(sock, targetId) {
         return false;
     }
 
+    // If newsletterMetadata is not available, skip verification
+    if (typeof sock.newsletterMetadata !== 'function') {
+        logger.info(`newsletterMetadata not available, skipping verification for: ${inviteCode}`);
+        return true;
+    }
+
     try {
         const metadata = await sock.newsletterMetadata('invite', inviteCode);
         if (metadata) {
@@ -341,8 +359,16 @@ async function checkNewsletterAccess(sock, targetId) {
             return true;
         }
     } catch (err) {
-        logger.warn(`Could not verify newsletter ${inviteCode}: ${err.message}`);
-        logger.warn('Make sure WHATSAPP_TARGET_ID is correct and your account has access to post.');
+        // Handle GraphQL errors gracefully
+        if (err.message?.includes('GraphQL')) {
+            logger.warn(`Could not verify newsletter ${inviteCode}: GraphQL API error`);
+            logger.warn(`  This is a known issue with some Baileys versions.`);
+            logger.warn(`  Will attempt to send messages anyway — if you have admin access, it should work.`);
+            return true; // Return true to allow sending attempts
+        } else {
+            logger.warn(`Could not verify newsletter ${inviteCode}: ${err.message}`);
+            logger.warn('Make sure WHATSAPP_TARGET_ID is correct and your account has access to post.');
+        }
     }
 
     return false;

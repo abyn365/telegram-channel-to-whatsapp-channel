@@ -1,6 +1,6 @@
 import { TelegramClient } from 'telegram';
-import { StringSession } from 'telegram/sessions';
-import { NewMessage } from 'telegram/events';
+import { StringSession } from 'telegram/sessions/index.js';
+import { NewMessage } from 'telegram/events/index.js';
 import { Api } from 'telegram';
 import readline from 'readline';
 import fs from 'fs-extra';

@@ -22,7 +22,23 @@ async function main() {
         if (/@newsletter$/i.test(normalizedId) && inviteCode) {
             console.log(`Querying newsletter: ${inviteCode}`);
             try {
-                const metadata = await sock.newsletterMetadata('invite', inviteCode);
+                let metadata = null;
+                
+                // Try newsletterMetadata if available
+                if (typeof sock.newsletterMetadata === 'function') {
+                    try {
+                        metadata = await sock.newsletterMetadata('invite', inviteCode);
+                    } catch (metadataErr) {
+                        // Check if it's a GraphQL error (common with newer Baileys versions)
+                        if (metadataErr.message?.includes('GraphQL')) {
+                            console.log(`\n[WARNING] Newsletter metadata API returned GraphQL error.`);
+                            console.log(`  This is a known issue with some Baileys versions.`);
+                        } else {
+                            throw metadataErr;
+                        }
+                    }
+                }
+                
                 if (metadata) {
                     console.log('\n[CHANNEL FOUND]');
                     console.log(`  Name:        ${metadata.name || 'Unknown'}`);
@@ -33,6 +49,17 @@ async function main() {
                     console.log('');
                     console.log('Set in .env:');
                     console.log(`  WHATSAPP_TARGET_ID=${metadata.id}`);
+                } else {
+                    // Fallback: construct the JID manually
+                    console.log('\n[CHANNEL INFO]');
+                    console.log(`  Could not fetch metadata (API may be unavailable).`);
+                    console.log(`  Invite Code: ${inviteCode}`);
+                    console.log(`  URL:         https://whatsapp.com/channel/${inviteCode}`);
+                    console.log('');
+                    console.log('You can try setting in .env:');
+                    console.log(`  WHATSAPP_TARGET_ID=${inviteCode}@newsletter`);
+                    console.log('');
+                    console.log('Note: The forwarding may still work even if metadata cannot be fetched.');
                 }
             } catch (err) {
                 console.log(`\n[ERROR] Could not find newsletter: ${err.message}`);
