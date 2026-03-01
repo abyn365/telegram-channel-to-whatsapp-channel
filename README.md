@@ -140,6 +140,26 @@ Copy the ID into `WHATSAPP_TARGET_ID` in `.env`. For WhatsApp channels, you can 
 
 **Note:** To forward to a WhatsApp Channel, your WhatsApp account must be an admin of that channel.
 
+### 4d · Follow a WhatsApp Channel
+
+If your WhatsApp channel doesn't appear in the list, you can subscribe to it using:
+
+```bash
+npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
+```
+
+Or with just the channel ID:
+
+```bash
+npm run follow-channel 0029Vb7T8V460eBW2gKeNC1x
+```
+
+Alternatively, follow the channel manually:
+1. Open WhatsApp on your phone
+2. Go to the **Updates** tab
+3. Find your channel and tap **Follow**
+4. Run `npm run list-chats` again to verify
+
 ---
 
 ## 5 · Run in the Background with PM2
@@ -188,7 +208,8 @@ pm2 save           # save current process list
 │   ├── forwarder.js        # Orchestrates download → format → send pipeline
 │   ├── messageFormatter.js # Builds WhatsApp message text/caption
 │   ├── logger.js           # Winston logger (console + file)
-│   └── listChats.js        # Utility script to list WhatsApp chats
+│   ├── listChats.js        # Utility script to list WhatsApp chats
+│   └── followChannel.js    # Utility script to subscribe to WhatsApp channels
 ├── sessions/               # Persisted auth sessions (gitignored)
 ├── logs/                   # Log files (gitignored)
 ├── temp/                   # Temporary media files (auto-cleaned)
@@ -210,10 +231,13 @@ pm2 save           # save current process list
 | Session expired (WhatsApp) | Delete `sessions/whatsapp/` and re-scan QR |
 | Session expired (Telegram) | Delete `sessions/telegram.session` and re-login |
 | `TargetCloseError: Protocol error` or `Session closed` | Usually caused by Chrome resource issues. The app now auto-detects Chrome/Chromium. Ensure you have enough RAM (at least 1GB free) and Chrome is installed properly. Try running again. |
+| Channel not showing in list-chats | Run `npm run follow-channel <channel-url>` to subscribe, or follow manually in WhatsApp app |
+| "No channels found" in list-chats | Make sure you've followed the channel from your WhatsApp app (Updates tab → Find channel → Follow) |
+| Cannot send to channel | Your WhatsApp account must be an admin of the channel to post messages |
 
 ---
 
-## Notes
+## 8 · Notes
 
 - **WhatsApp channels** require the account linked to be the channel admin.  
 - **WhatsApp groups** work with any member account.  
