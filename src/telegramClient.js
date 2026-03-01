@@ -271,22 +271,41 @@ async function getSenderName(client, fromId) {
 }
 
 function startListener(client, channelFilters, onMessage, channelLabels = channelFilters) {
-    // Extract entity IDs for filtering - supports both entity objects and strings
-    const chatIds = channelFilters.map((channel) => {
-        if (typeof channel === 'string') return channel;
-        if (channel?.id) return channel.id;
-        return channel;
-    }).filter(Boolean);
+    const allowedChatIds = new Set(
+        (channelFilters || [])
+            .map((channel) => {
+                if (typeof channel === 'string') return channel.replace(/^@/, '');
+                if (channel?.username) return String(channel.username).replace(/^@/, '');
+                if (channel?.id) return String(channel.id);
+                return String(channel || '');
+            })
+            .filter(Boolean)
+    );
 
     client.addEventHandler(async (event) => {
         try {
             const msg = event.message;
             if (!msg) return;
+
+            const peerId = String(msg.peerId?.channelId || msg.peerId?.chatId || msg.peerId?.userId || '');
+            const peerIdWithPrefix = peerId ? `-100${peerId}` : '';
+            const peerUsername = String(msg.chat?.username || msg.chat?.title || '').replace(/^@/, '');
+
+            const isAllowed =
+                !allowedChatIds.size ||
+                allowedChatIds.has(peerId) ||
+                allowedChatIds.has(peerIdWithPrefix) ||
+                allowedChatIds.has(peerUsername);
+
+            if (!isAllowed) {
+                return;
+            }
+
             await onMessage(msg);
         } catch (err) {
             logger.error('Error handling Telegram message event:', err);
         }
-    }, new NewMessage({ chats: chatIds }));
+    }, new NewMessage({}));
 
     const labels = (channelLabels || []).map((channel) => {
         if (typeof channel === 'string') return channel;
@@ -297,6 +316,69 @@ function startListener(client, channelFilters, onMessage, channelLabels = channe
     });
 
     logger.info(`Listening on Telegram channels: ${labels.join(', ')}`);
+}
+
+
+function startPollingChannels(client, channelFilters, onMessage) {
+    const pollingEnabled = String(process.env.TELEGRAM_POLLING_ENABLED || 'true').toLowerCase() !== 'false';
+    if (!pollingEnabled) {
+        logger.info('Telegram polling fallback is disabled (TELEGRAM_POLLING_ENABLED=false).');
+        return () => {};
+    }
+
+    const intervalMs = Math.max(parseInt(process.env.TELEGRAM_POLL_INTERVAL_MS, 10) || 15000, 5000);
+    const entities = (channelFilters || []).filter(Boolean);
+    const lastSeenByChannel = new Map();
+    let stopped = false;
+
+    const pollOnce = async () => {
+        if (stopped) return;
+
+        for (const entity of entities) {
+            try {
+                const history = await client.getMessages(entity, { limit: 10 });
+                if (!history || history.length === 0) continue;
+
+                const channelKey = String(entity?.id || entity?.username || entity);
+                const knownMax = lastSeenByChannel.get(channelKey) || 0;
+                let latestSeen = knownMax;
+
+                const sortedAsc = [...history].sort((a, b) => (a.id || 0) - (b.id || 0));
+                for (const msg of sortedAsc) {
+                    if (!msg?.id) continue;
+                    latestSeen = Math.max(latestSeen, msg.id);
+
+                    if (knownMax > 0 && msg.id <= knownMax) continue;
+                    if (msg.out) continue;
+
+                    await onMessage(msg);
+                }
+
+                if (latestSeen > 0) {
+                    lastSeenByChannel.set(channelKey, latestSeen);
+                }
+            } catch (err) {
+                logger.warn(`Polling failed for Telegram channel ${entity?.title || entity?.username || entity}: ${err.message || err}`);
+            }
+        }
+    };
+
+    const timer = setInterval(() => {
+        pollOnce().catch((err) => {
+            logger.warn(`Telegram polling cycle failed: ${err.message || err}`);
+        });
+    }, intervalMs);
+
+    pollOnce().catch((err) => {
+        logger.warn(`Initial Telegram polling failed: ${err.message || err}`);
+    });
+
+    logger.info(`Telegram polling fallback enabled every ${intervalMs} ms.`);
+
+    return () => {
+        stopped = true;
+        clearInterval(timer);
+    };
 }
 
 export {
@@ -313,4 +395,5 @@ export {
     extractSenderInfo,
     getSenderName,
     startListener,
+    startPollingChannels,
 };

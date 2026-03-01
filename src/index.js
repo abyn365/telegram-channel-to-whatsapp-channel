@@ -5,6 +5,7 @@ import {
     resolveChannelTargets,
     resolveChannelEntities,
     startListener,
+    startPollingChannels,
 } from './telegramClient.js';
 import {
     createWhatsAppClientWithReconnect,
@@ -38,10 +39,24 @@ async function main() {
         logger.info(`Watching Telegram channel: ${ch} → "${title || 'Unknown'}"`);
     }
 
-    startListener(telegramClient, channelEntities, async (message) => {
+    const processedMessages = new Set();
+
+    const handleIncomingMessage = async (message) => {
         const chatKey = String(
             message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || ''
         );
+        const dedupeKey = `${chatKey}:${message.id || ''}`;
+        if (processedMessages.has(dedupeKey)) {
+            return;
+        }
+        processedMessages.add(dedupeKey);
+        if (processedMessages.size > 10000) {
+            const stale = [...processedMessages].slice(0, 1000);
+            for (const key of stale) {
+                processedMessages.delete(key);
+            }
+        }
+
         const titleByPeer = channelTitles[chatKey] || channelTitles[`-100${chatKey}`] || '';
 
         let title = titleByPeer;
@@ -52,12 +67,16 @@ async function main() {
         }
 
         await forwardMessage(telegramClient, whatsappSock, message, targetId, title);
-    });
+    };
+
+    startListener(telegramClient, channelEntities, handleIncomingMessage);
+    const stopPolling = startPollingChannels(telegramClient, channelEntities, handleIncomingMessage);
 
     logger.info('Forwarder is running. Waiting for new messages...');
 
     const shutdown = async (signal) => {
         logger.info(`${signal} received. Shutting down gracefully...`);
+        try { stopPolling(); } catch {}
         try { await telegramClient.disconnect(); } catch {}
         try { whatsappSock.end(undefined); } catch {}
         process.exit(0);
