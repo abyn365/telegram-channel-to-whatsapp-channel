@@ -1,0 +1,37 @@
+{
+  "name": "telegram-channel-to-whatsapp-channel",
+  "version": "1.0.0",
+  "description": "Userbot that forwards Telegram channel updates to a WhatsApp channel — supports text, images, videos, audio, documents, stickers, polls, locations, and more.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:pm2": "pm2 start ecosystem.config.js",
+    "stop:pm2": "pm2 stop tg-wa-forwarder",
+    "restart:pm2": "pm2 restart tg-wa-forwarder",
+    "logs:pm2": "pm2 logs tg-wa-forwarder",
+    "list-chats": "node src/listChats.js",
+    "test": "echo \"No tests defined\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://x-access-token:ghs_u6gV5B2PLEg9mraHt0mIQi6GuosrRR35bCx7@github.com/abyn365/telegram-channel-to-whatsapp-channel.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/abyn365/telegram-channel-to-whatsapp-channel/issues"
+  },
+  "homepage": "https://github.com/abyn365/telegram-channel-to-whatsapp-channel#readme",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "fs-extra": "^11.3.3",
+    "mime-types": "^3.0.2",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "telegram": "^2.26.22",
+    "whatsapp-web.js": "^1.34.6",
+    "winston": "^3.19.0"
+  }
+}
