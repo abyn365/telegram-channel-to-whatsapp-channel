@@ -8,6 +8,38 @@ const { execSync } = require('child_process');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Wait for the WhatsApp Web page to be stable (no ongoing navigation)
+ */
+async function waitForPageStable(client, maxWaitMs = 10000) {
+    const startTime = Date.now();
+    const checkInterval = 500;
+    
+    while (Date.now() - startTime < maxWaitMs) {
+        try {
+            const navigationState = await client.pupPage.evaluate(() => {
+                return {
+                    readyState: document.readyState,
+                    url: window.location.href,
+                };
+            });
+            
+            // Check if page is in a stable state
+            if (navigationState.readyState === 'complete' && 
+                !navigationState.url.includes('loading') &&
+                navigationState.url.includes('web.whatsapp.com')) {
+                // Give a bit more time for any post-load scripts
+                await sleep(500);
+                return true;
+            }
+        } catch (e) {
+            // Ignore evaluation errors during stability check
+        }
+        await sleep(checkInterval);
+    }
+    return false;
+}
+
 const resolvedTargets = new Set();
 
 /**
@@ -15,6 +47,9 @@ const resolvedTargets = new Set();
  * This is needed for newsletter/channel functionality
  */
 async function initializeStore(client) {
+    // Wait for page to be stable before injection
+    await waitForPageStable(client);
+    
     try {
         await client.pupPage.evaluate(() => {
             // This injects the Store module which is required for newsletter operations
@@ -216,9 +251,16 @@ async function listChats(client, retries = 3) {
     // Initialize Store first for newsletter access
     await initializeStore(client);
     
+    // Wait for page to be stable before evaluating JavaScript
+    await waitForPageStable(client);
+    
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             await sleep(2000);
+            
+            // Wait for page stability before each attempt
+            await waitForPageStable(client);
+            
             const chats = await client.getChats();
             
             // Also try to get channels via the newsletter method
@@ -303,9 +345,18 @@ async function listChats(client, retries = 3) {
             
             return allItems;
         } catch (err) {
-            if (err.message.includes('Execution context was destroyed') && attempt < retries) {
-                logger.warn(`listChats attempt ${attempt} failed due to navigation, retrying...`);
-                await sleep(2000);
+            const errorMessage = err.message || '';
+            // Check for various navigation-related errors from whatsapp-web.js and puppeteer
+            const isNavigationError = 
+                errorMessage.includes('Execution context was destroyed') ||
+                errorMessage.includes('navigation') ||
+                errorMessage.includes('TargetCloseError') ||
+                errorMessage.includes('Protocol error') ||
+                errorMessage.includes('Session closed');
+            
+            if (isNavigationError && attempt < retries) {
+                logger.warn(`listChats attempt ${attempt} failed (${errorMessage}), retrying...`);
+                await sleep(3000);
                 continue;
             }
             throw err;
