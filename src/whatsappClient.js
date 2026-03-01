@@ -47,6 +47,24 @@ function findChromeExecutable() {
 async function createWhatsAppClient() {
     const executablePath = findChromeExecutable();
 
+    // Check for existing session and warn if it might be stale
+    const sessionPath = path.join(__dirname, '../sessions/whatsapp');
+    const sessionFile = path.join(sessionPath, 'session.json');
+    if (await fs.pathExists(sessionFile)) {
+        try {
+            const stats = await fs.stat(sessionFile);
+            const sessionAge = Date.now() - stats.mtimeMs;
+            // If session file is older than 30 days, warn about potential expiry
+            if (sessionAge > 30 * 24 * 60 * 60 * 1000) {
+                logger.warn('WhatsApp session appears to be older than 30 days and may have expired. If connection fails, try deleting the sessions/whatsapp folder.');
+            } else {
+                logger.info('Found existing WhatsApp session, attempting to reconnect...');
+            }
+        } catch (e) {
+            // Ignore - session file may be corrupted
+        }
+    }
+
     const client = new Client({
         authStrategy: new LocalAuth({
             dataPath: path.join(__dirname, '../sessions/whatsapp'),
@@ -54,6 +72,8 @@ async function createWhatsAppClient() {
         puppeteer: {
             headless: 'new',
             executablePath: executablePath,
+            timeout: 120000,
+            protocolTimeout: 180000,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -87,6 +107,14 @@ async function createWhatsAppClient() {
             logger.info(`WhatsApp loading: ${percent}% - ${message || 'connecting...'}`);
         });
 
+        client.on('authenticated', () => {
+            logger.info('WhatsApp session authenticated successfully');
+        });
+
+        client.on('auth_logged_out', (info) => {
+            logger.warn('WhatsApp auth logged out:', info);
+        });
+
         client.on('qr', (qr) => {
             qrGenerated = true;
             logger.info('WhatsApp QR code generated — scan with your phone:');
@@ -117,7 +145,11 @@ async function createWhatsAppClient() {
         // Add timeout warning after 2 minutes if still connecting
         const timeoutWarning = setTimeout(() => {
             if (!readyFired) {
-                logger.warn('WhatsApp is taking longer than 2 minutes to connect. If this is your first run, please scan the QR code now.');
+                if (qrGenerated) {
+                    logger.warn('WhatsApp QR code was generated but not scanned within 2 minutes. Please scan now or restart to generate a new QR code.');
+                } else {
+                    logger.warn('WhatsApp is taking longer than 2 minutes to connect. This may indicate a session issue - the saved session may have expired.');
+                }
             }
         }, 120_000);
 
