@@ -65,13 +65,6 @@ async function main() {
     
     logger.info('Connecting to WhatsApp...');
     const client = await createWhatsAppClient();
-
-    if (client.__provider === 'waha') {
-        logger.error('follow-channel is not supported with WHATSAPP_PROVIDER=waha.');
-        logger.info('Please follow the channel from your phone, then run `npm run list-chats` to copy the channel @newsletter ID from WAHA.');
-        await client.destroy();
-        process.exit(1);
-    }
     
     try {
         const result = await followChannel(client, targetId);
