@@ -6,7 +6,12 @@ const {
     resolveChannelEntities,
     startListener,
 } = require('./telegramClient');
-const { createWhatsAppClient, normalizeWhatsAppId } = require('./whatsappClient');
+const {
+    createWhatsAppClient,
+    normalizeWhatsAppId,
+    getChannelCandidatesFromPageStore,
+    resolveChannelTargetIdFromPage,
+} = require('./whatsappClient');
 const { forwardMessage } = require('./forwarder');
 
 async function checkWhatsAppTarget(client, targetId) {
@@ -32,12 +37,24 @@ async function checkWhatsAppTarget(client, targetId) {
     try {
         const channels = await client.getChannels();
         const found = channels && channels.find(c => c.id._serialized === normalizedId);
-        
+
         if (found) {
             logger.info(`WhatsApp channel verified: "${found.name}" (${inviteCode})`);
             return true;
         }
-        
+
+        try {
+            const resolvedId = await resolveChannelTargetIdFromPage(client, normalizedId);
+            const storeChannels = await getChannelCandidatesFromPageStore(client);
+            const storeMatch = storeChannels.find((channel) => channel.id === resolvedId || channel.id === normalizedId);
+            if (storeMatch) {
+                logger.info(`WhatsApp channel loaded from WhatsApp Web store: "${storeMatch.name}" (${inviteCode})`);
+                return true;
+            }
+        } catch (storeErr) {
+            logger.debug(`Channel store lookup failed: ${storeErr.message}`);
+        }
+
         // Channel not found in followed list
         logger.warn('');
         logger.warn('=== WHATSAPP CHANNEL NOT FOUND ===');
@@ -52,7 +69,7 @@ async function checkWhatsAppTarget(client, targetId) {
         logger.warn('  1. Run: npm run follow-channel https://whatsapp.com/channel/' + inviteCode);
         logger.warn('  2. Or open WhatsApp on your phone → Updates → Channels → Follow the channel');
         logger.warn('');
-        
+
         // Try to subscribe automatically
         try {
             logger.info('Attempting to automatically follow the channel...');
@@ -64,7 +81,7 @@ async function checkWhatsAppTarget(client, targetId) {
         } catch (subErr) {
             logger.warn(`Auto-follow failed: ${subErr.message}`);
         }
-        
+
         return false;
     } catch (err) {
         logger.warn(`Could not check channel status: ${err.message}`);

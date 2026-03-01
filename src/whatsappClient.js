@@ -355,11 +355,49 @@ async function getChannelCandidatesFromPageStore(client) {
     try {
         const candidates = await client.pupPage.evaluate(() => {
             const ids = new Map();
+            const seen = new Set();
+            const maxDepth = 3;
+
+            const safeStringify = (value) => {
+                try {
+                    return JSON.stringify(value || {});
+                } catch (err) {
+                    return '';
+                }
+            };
+
+            const normalizeCandidateId = (value) => {
+                if (!value || typeof value !== 'string') return null;
+                const sanitized = value.trim();
+                if (!sanitized) return null;
+
+                if (/@newsletter$/i.test(sanitized)) {
+                    return sanitized.replace(/@newsletter$/i, '@newsletter');
+                }
+
+                const urlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
+                if (urlMatch) {
+                    return `${urlMatch[1]}@newsletter`;
+                }
+
+                const embedded = sanitized.match(/([a-zA-Z0-9]{15,})@newsletter/i);
+                if (embedded) {
+                    return `${embedded[1]}@newsletter`;
+                }
+
+                if (/^[a-zA-Z0-9]{15,}$/.test(sanitized)) {
+                    return `${sanitized}@newsletter`;
+                }
+
+                return null;
+            };
+
             const addCandidate = (id, name, source, raw) => {
-                if (!id || typeof id !== 'string' || !id.includes('@newsletter')) return;
-                if (!ids.has(id)) {
-                    ids.set(id, {
-                        id,
+                const normalized = normalizeCandidateId(id);
+                if (!normalized) return;
+                if (!ids.has(normalized)) {
+                    ids.set(normalized, {
+                        id: normalized,
                         name: name || 'WhatsApp Channel',
                         source,
                         raw: raw || '',
@@ -367,27 +405,95 @@ async function getChannelCandidatesFromPageStore(client) {
                 }
             };
 
-            const inspectModels = (models, source) => {
-                if (!Array.isArray(models)) return;
-                for (const item of models) {
+            const inspectItem = (item, source) => {
+                if (!item) return;
+
+                if (typeof item === 'string') {
+                    addCandidate(item, null, source, item);
+                    return;
+                }
+
+                if (typeof item !== 'object') return;
+
+                const serialized = item?.id?._serialized || item?.id?.toString?.() || item?.jid?._serialized || item?.jid || item?._serialized;
+                const name = item?.name || item?.formattedTitle || item?.displayName || item?.newsletterMetadata?.name || item?.title;
+                const raw = safeStringify(item);
+
+                addCandidate(serialized, name, source, raw);
+                addCandidate(item?.inviteCode, name, source, raw);
+                addCandidate(item?.newsletterInviteCode, name, source, raw);
+                addCandidate(item?.newsletter?.inviteCode, name, source, raw);
+                addCandidate(item?.newsletter?.id, name, source, raw);
+                addCandidate(item?.newsletterMetadata?.id, name, source, raw);
+            };
+
+            const traverse = (value, source, depth = 0) => {
+                if (!value || depth > maxDepth) return;
+                if (typeof value === 'function') return;
+
+                if (typeof value === 'string') {
+                    addCandidate(value, null, source, value);
+                    return;
+                }
+
+                if (typeof value !== 'object') return;
+
+                if (seen.has(value)) return;
+                seen.add(value);
+
+                inspectItem(value, source);
+
+                if (Array.isArray(value)) {
+                    value.forEach((item) => traverse(item, source, depth + 1));
+                    return;
+                }
+
+                if (value instanceof Map) {
+                    value.forEach((item) => traverse(item, source, depth + 1));
+                }
+
+                if (value instanceof Set) {
+                    value.forEach((item) => traverse(item, source, depth + 1));
+                }
+
+                if (Array.isArray(value.models)) {
+                    traverse(value.models, `${source}.models`, depth + 1);
+                }
+
+                if (Array.isArray(value._models)) {
+                    traverse(value._models, `${source}._models`, depth + 1);
+                }
+
+                if (typeof value.getModels === 'function') {
                     try {
-                        const serialized = item?.id?._serialized || item?.id?.toString?.() || item?.jid?._serialized || item?.jid || item?._serialized;
-                        const name = item?.name || item?.formattedTitle || item?.displayName || item?.newsletterMetadata?.name;
-                        const raw = JSON.stringify(item || {});
-                        addCandidate(serialized, name, source, raw);
-                    } catch (e) {
-                        // ignore model parsing errors
+                        traverse(value.getModels(), `${source}.getModels`, depth + 1);
+                    } catch (err) {
+                        // ignore
                     }
+                }
+
+                if (typeof value.toArray === 'function') {
+                    try {
+                        traverse(value.toArray(), `${source}.toArray`, depth + 1);
+                    } catch (err) {
+                        // ignore
+                    }
+                }
+
+                for (const [key, child] of Object.entries(value)) {
+                    if (key === 'models' || key === '_models') continue;
+                    traverse(child, `${source}.${key}`, depth + 1);
                 }
             };
 
             const store = window.Store || {};
-            inspectModels(store.Chat?.models, 'Store.Chat.models');
+            traverse(store.Chat?.models, 'Store.Chat.models');
 
             for (const [key, value] of Object.entries(store)) {
                 if (!value) continue;
-                if (Array.isArray(value?.models) && /newsletter|channel/i.test(key)) {
-                    inspectModels(value.models, `Store.${key}.models`);
+                const shouldScan = /newsletter|channel|update/i.test(key) || key === 'Chat' || key === 'Contact';
+                if (shouldScan) {
+                    traverse(value, `Store.${key}`);
                 }
             }
 

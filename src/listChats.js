@@ -13,7 +13,7 @@ function getChannelUrl(id) {
 async function main() {
     logger.info('Connecting to WhatsApp to list available chats...');
     const client = await createWhatsAppClient();
-    
+
     let chats = [];
     try {
         chats = await listChats(client);
@@ -21,12 +21,30 @@ async function main() {
         logger.error('Error listing chats:', err.message);
     }
 
+    const manualTarget = process.argv[2];
+    if (manualTarget) {
+        const normalizedManual = normalizeWhatsAppId(manualTarget);
+        if (normalizedManual.includes('@newsletter')) {
+            const inviteCode = extractInviteCode(manualTarget) || normalizedManual.replace('@newsletter', '');
+            let resolvedManual = await resolveChannelTargetId(client, manualTarget);
+            resolvedManual = await resolveChannelTargetIdFromPage(client, resolvedManual);
+
+            if (!chats.find((c) => c.id === resolvedManual)) {
+                chats.push({
+                    id: resolvedManual,
+                    name: `Channel (from ${inviteCode})`,
+                    type: 'channel',
+                });
+            }
+        }
+    }
+
     console.log('\n=== Available WhatsApp Chats ===\n');
-    
+
     const channels = chats.filter(c => c.type === 'channel');
     const groups = chats.filter(c => c.type === 'group');
     const regularChats = chats.filter(c => c.type === 'chat');
-    
+
     if (channels.length > 0) {
         console.log('--- WhatsApp Channels ---');
         channels.forEach((c) => {
@@ -63,8 +81,10 @@ async function main() {
     console.log('  - The full URL: https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
     console.log('  - Or just the channel ID: 0029Vb7T8V460eBW2gKeNC1x');
     console.log('  - The code automatically adds @newsletter suffix');
+    console.log('  - You can also pass a channel link to list-chats to force resolution:');
+    console.log('    npm run list-chats https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
     console.log('');
-    
+
     // Check if WHATSAPP_TARGET_ID is set to a channel and provide specific guidance
     const targetId = process.env.WHATSAPP_TARGET_ID;
     if (targetId) {
@@ -106,7 +126,8 @@ async function main() {
         console.log('If you have channels but they don\'t appear:');
         console.log('  1. Make sure you\'ve "Followed" the channel from your WhatsApp app');
         console.log('  2. Run: npm run follow-channel <channel-url> to subscribe via the bot');
-        console.log('  3. Example: npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
+        console.log('  3. Run: npm run list-chats <channel-url> to resolve the ID directly');
+        console.log('  4. Example: npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
         console.log('');
         console.log('Note: As a channel admin, you may need to follow your own channel first.');
         console.log('');
