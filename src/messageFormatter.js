@@ -23,7 +23,9 @@ const CHANNEL_ORIGIN_EMOJI = {
     unknown: '📩',
 };
 
-function buildCaption(message, channelTitle, prefix) {
+function buildCaption(message, channelTitle, prefix, senderInfo) {
+    const includeQuote = process.env.INCLUDE_QUOTE !== 'false';
+    
     const mediaType = getMediaType(message);
     const rawText = extractText(message);
     const webUrl = extractWebPageUrl(message);
@@ -46,12 +48,50 @@ function buildCaption(message, channelTitle, prefix) {
 
     if (webUrl) parts.push(`🔗 ${webUrl}`);
 
-    return parts.filter(Boolean).join('\n\n');
+    const caption = parts.filter(Boolean).join('\n\n');
+
+    if (!includeQuote) {
+        return caption;
+    }
+    
+    const quoteText = buildQuoteText(channelTitle, senderInfo);
+    
+    if (quoteText) {
+        return `${caption}\n\n${quoteText}`;
+    }
+    
+    return caption;
 }
 
-function buildPayload(message, filePath, channelTitle) {
+function buildQuoteText(channelTitle, senderInfo) {
+    if (!channelTitle && !senderInfo?.name && !senderInfo?.phone) {
+        return null;
+    }
+
+    const parts = [];
+    
+    if (channelTitle) {
+        parts.push(`Channel: ${channelTitle}`);
+    }
+    
+    if (senderInfo?.name) {
+        parts.push(`Author: ${senderInfo.name}`);
+    }
+    
+    if (senderInfo?.phone) {
+        parts.push(`Number: ${senderInfo.phone}`);
+    }
+
+    if (parts.length === 0) {
+        return null;
+    }
+
+    return `> ${parts.join(' | ')}`;
+}
+
+function buildPayload(message, filePath, channelTitle, senderInfo) {
     const prefix = process.env.MESSAGE_PREFIX || '';
-    const text = buildCaption(message, channelTitle, prefix);
+    const text = buildCaption(message, channelTitle, prefix, senderInfo);
     const mediaType = getMediaType(message);
 
     return { text, filePath, mediaType };

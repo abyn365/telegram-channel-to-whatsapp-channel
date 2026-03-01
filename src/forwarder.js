@@ -1,6 +1,6 @@
 const path = require('path');
 const logger = require('./logger');
-const { downloadMedia, getMediaType } = require('./telegramClient');
+const { downloadMedia, getMediaType, extractSenderInfo, getSenderName } = require('./telegramClient');
 const { sendMessage } = require('./whatsappClient');
 const { buildPayload } = require('./messageFormatter');
 
@@ -27,7 +27,16 @@ async function forwardMessage(telegramClient, whatsappClient, message, targetId,
         filePath = await downloadMedia(telegramClient, message, TEMP_DIR);
     }
 
-    const payload = buildPayload(message, filePath, channelTitle);
+    const senderInfo = extractSenderInfo(message, telegramClient);
+    
+    if (!senderInfo.name && message.fromId) {
+        const senderName = await getSenderName(telegramClient, message.fromId);
+        if (senderName) {
+            senderInfo.name = senderName;
+        }
+    }
+
+    const payload = buildPayload(message, filePath, channelTitle, senderInfo);
 
     try {
         await sendMessage(whatsappClient, targetId, payload);
