@@ -121,14 +121,18 @@ async function createWhatsAppClient(onReconnect) {
                 if (loggedOut) {
                     clearTimeout(timeout);
                     logger.error('WhatsApp session logged out. Delete sessions/baileys/ and restart to re-authenticate.');
-                    reject(new Error('WhatsApp logged out'));
+                    const error = new Error('WhatsApp logged out');
+                    error.isLoggedOut = true;
+                    reject(error);
                     return;
                 }
 
                 if (!_isConnected) {
                     clearTimeout(timeout);
                     logger.warn(`WhatsApp connection closed during init (code ${statusCode}). Retrying...`);
-                    reject(new Error(`WhatsApp connection closed: ${statusCode}`));
+                    const error = new Error(`WhatsApp connection closed: ${statusCode}`);
+                    error.statusCode = statusCode;
+                    reject(error);
                     return;
                 }
 
@@ -151,27 +155,47 @@ async function createWhatsAppClientWithReconnect() {
     let sock = null;
     let resolveReady;
     let rejectReady;
+    let isReady = false;
     const readyPromise = new Promise((res, rej) => {
         resolveReady = res;
         rejectReady = rej;
     });
 
+    const scheduleReconnect = async (reason) => {
+        _reconnectAttempts++;
+        if (_reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            logger.error(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Exiting.`);
+            process.exit(1);
+        }
+        const delay = Math.min(1000 * Math.pow(2, _reconnectAttempts), 60_000);
+        if (reason) {
+            logger.warn(`WhatsApp connection failed (${reason}). Reconnecting in ${delay / 1000}s (attempt ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+        } else {
+            logger.info(`Reconnecting WhatsApp in ${delay / 1000}s (attempt ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+        }
+        await sleep(delay);
+        await connect();
+    };
+
     const connect = async () => {
         try {
             sock = await createWhatsAppClient(async () => {
-                _reconnectAttempts++;
-                if (_reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-                    logger.error(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Exiting.`);
-                    process.exit(1);
-                }
-                const delay = Math.min(1000 * Math.pow(2, _reconnectAttempts), 60_000);
-                logger.info(`Reconnecting WhatsApp in ${delay / 1000}s (attempt ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-                await sleep(delay);
-                await connect();
+                await scheduleReconnect('disconnected');
             });
-            resolveReady(sock);
+            _reconnectAttempts = 0;
+            if (!isReady) {
+                isReady = true;
+                resolveReady(sock);
+            }
         } catch (err) {
-            rejectReady(err);
+            if (err?.isLoggedOut) {
+                if (!isReady) {
+                    rejectReady(err);
+                }
+                return;
+            }
+            const reason = err?.message || 'unknown error';
+            await scheduleReconnect(reason);
         }
     };
 
