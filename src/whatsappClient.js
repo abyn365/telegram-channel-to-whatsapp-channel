@@ -75,24 +75,38 @@ async function createWhatsAppClient() {
     });
 
     await new Promise((resolve, reject) => {
+        // Use 5 minute timeout to allow time for QR code scanning on first run
         const timeout = setTimeout(() => {
-            reject(new Error('WhatsApp connection timed out after 3 minutes'));
-        }, 180_000);
+            reject(new Error('WhatsApp connection timed out after 5 minutes'));
+        }, 300_000);
+
+        let qrGenerated = false;
+        let readyFired = false;
+
+        client.on('loading_screen', (percent, message) => {
+            logger.info(`WhatsApp loading: ${percent}% - ${message || 'connecting...'}`);
+        });
 
         client.on('qr', (qr) => {
+            qrGenerated = true;
             logger.info('WhatsApp QR code generated — scan with your phone:');
             qrcode.generate(qr, { small: true });
+            logger.info('(If QR code is not scannable, try logging into WhatsApp Web manually at web.whatsapp.com)');
         });
 
         client.on('ready', async () => {
+            if (readyFired) return; // Prevent double-firing
+            readyFired = true;
             clearTimeout(timeout);
+            clearTimeout(timeoutWarning);
             logger.info('WhatsApp userbot ready.');
-            await sleep(3000);
+            await sleep(1000);
             resolve();
         });
 
         client.on('auth_failure', (msg) => {
             clearTimeout(timeout);
+            clearTimeout(timeoutWarning);
             reject(new Error(`WhatsApp auth failure: ${msg}`));
         });
 
@@ -100,9 +114,17 @@ async function createWhatsAppClient() {
             logger.warn(`WhatsApp disconnected: ${reason}`);
         });
 
+        // Add timeout warning after 2 minutes if still connecting
+        const timeoutWarning = setTimeout(() => {
+            if (!readyFired) {
+                logger.warn('WhatsApp is taking longer than 2 minutes to connect. If this is your first run, please scan the QR code now.');
+            }
+        }, 120_000);
+
         // Handle puppeteer/browser errors during initialization
         client.on('error', (error) => {
             clearTimeout(timeout);
+            clearTimeout(timeoutWarning);
             logger.error('WhatsApp client error during initialization:', error);
             if (error.message.includes('TargetCloseError') || error.message.includes('Session closed')) {
                 reject(new Error('Browser closed unexpectedly during initialization. This may be due to resource constraints or Chrome compatibility issues. Try again or check system resources.'));
@@ -113,6 +135,7 @@ async function createWhatsAppClient() {
 
         client.initialize().catch((err) => {
             clearTimeout(timeout);
+            clearTimeout(timeoutWarning);
             reject(err);
         });
     });
