@@ -40,6 +40,24 @@ async function waitForPageStable(client, maxWaitMs = 10000) {
 
 const resolvedTargets = new Set();
 
+function extractInviteCode(targetId) {
+    if (!targetId) return null;
+
+    const sanitized = String(targetId).trim().replace(/^['"]+|['"]+$/g, '');
+    if (!sanitized) return null;
+
+    const channelUrlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
+    if (channelUrlMatch) {
+        return channelUrlMatch[1];
+    }
+
+    if (/^[a-zA-Z0-9]{15,}$/.test(sanitized) && !sanitized.includes('@')) {
+        return sanitized;
+    }
+
+    return null;
+}
+
 function findChromeExecutable() {
     const possiblePaths = [
         '/usr/bin/google-chrome-stable',
@@ -292,6 +310,32 @@ function normalizeWhatsAppId(targetId) {
     return sanitized;
 }
 
+async function resolveChannelTargetId(client, targetId) {
+    const normalizedId = normalizeWhatsAppId(targetId);
+
+    if (!/@newsletter$/i.test(normalizedId)) {
+        return normalizedId;
+    }
+
+    const inviteCode = extractInviteCode(targetId) || normalizedId.replace(/@newsletter$/i, '');
+
+    try {
+        const channel = await client.getChannelByInviteCode(inviteCode);
+        const resolvedId = channel?.id?._serialized;
+
+        if (resolvedId && /@newsletter$/i.test(resolvedId)) {
+            if (resolvedId !== normalizedId) {
+                logger.info(`Resolved channel invite code ${inviteCode} to WhatsApp channel ID ${resolvedId}`);
+            }
+            return resolvedId;
+        }
+    } catch (err) {
+        logger.debug(`Could not resolve invite code ${inviteCode} to channel ID: ${err.message}`);
+    }
+
+    return normalizedId;
+}
+
 async function ensureTargetAvailable(client, targetId) {
     if (!targetId || resolvedTargets.has(targetId)) return;
 
@@ -446,7 +490,7 @@ async function preloadChannel(client, channelId) {
 }
 
 async function sendWithRetry(client, targetId, content, options) {
-    const normalizedId = normalizeWhatsAppId(targetId);
+    const normalizedId = await resolveChannelTargetId(client, targetId);
     
     // For channels, try to pre-load before ensuring target
     if (normalizedId.includes('@newsletter')) {
@@ -535,4 +579,6 @@ module.exports = {
     listChats,
     sendMessage,
     normalizeWhatsAppId,
+    resolveChannelTargetId,
+    extractInviteCode,
 };
