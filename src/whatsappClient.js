@@ -10,6 +10,40 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const resolvedTargets = new Set();
 
+/**
+ * Initialize the WhatsApp Web Store by injecting the required modules
+ * This is needed for newsletter/channel functionality
+ */
+async function initializeStore(client) {
+    try {
+        await client.pupPage.evaluate(() => {
+            // This injects the Store module which is required for newsletter operations
+            if (!window.Store) {
+                const webpack = window.webpackChunkwhatsapp_web_client || window.webpackChunkwhatsapp_web;
+                if (webpack) {
+                    const modules = webpack.push([[Symbol()], {}, (req) => req]);
+                    const cache = modules.c || modules;
+                    for (const key in cache) {
+                        const mod = cache[key];
+                        if (mod && mod.exports) {
+                            if (mod.exports.default && mod.exports.default.Store) {
+                                window.Store = mod.exports.default.Store;
+                                break;
+                            }
+                            if (mod.exports.Store) {
+                                window.Store = mod.exports.Store;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (err) {
+        logger.debug(`Store initialization: ${err.message}`);
+    }
+}
+
 function findChromeExecutable() {
     const possiblePaths = [
         '/usr/bin/google-chrome-stable',
@@ -128,6 +162,9 @@ async function createWhatsAppClient() {
             clearTimeout(timeout);
             clearTimeout(timeoutWarning);
             logger.info('WhatsApp userbot ready.');
+            
+            // Initialize the Store for newsletter/channel functionality
+            await initializeStore(client);
             await sleep(1000);
             resolve();
         });
@@ -176,6 +213,9 @@ async function createWhatsAppClient() {
 }
 
 async function listChats(client, retries = 3) {
+    // Initialize Store first for newsletter access
+    await initializeStore(client);
+    
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             await sleep(2000);
@@ -197,12 +237,48 @@ async function listChats(client, retries = 3) {
                         // Access the Store module that whatsapp-web.js uses
                         const store = window.Store;
                         if (store && store.Newsletter) {
-                            const newsletters = await store.Newsletter.getSubscribed();
-                            for (const nl of newsletters) {
-                                result.push({
-                                    id: nl.id?._serialized || nl.id,
-                                    name: nl.name || nl.title || 'WhatsApp Channel',
-                                });
+                            // Try getSubscribed method
+                            if (store.Newsletter.getSubscribed) {
+                                const newsletters = await store.Newsletter.getSubscribed();
+                                for (const nl of newsletters) {
+                                    result.push({
+                                        id: nl.id?._serialized || nl.id,
+                                        name: nl.name || nl.title || 'WhatsApp Channel',
+                                    });
+                                }
+                            }
+                            // Try newsletters property
+                            if (store.Newsletter.newsletters) {
+                                const nlMap = store.Newsletter.newsletters;
+                                if (nlMap && typeof nlMap.forEach === 'function') {
+                                    nlMap.forEach((nl) => {
+                                        result.push({
+                                            id: nl.id?._serialized || nl.id,
+                                            name: nl.name || nl.title || 'WhatsApp Channel',
+                                        });
+                                    });
+                                } else if (nlMap && typeof nlMap === 'object') {
+                                    for (const key in nlMap) {
+                                        const nl = nlMap[key];
+                                        result.push({
+                                            id: nl.id?._serialized || nl.id,
+                                            name: nl.name || nl.title || 'WhatsApp Channel',
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Also try NewsletterManager
+                        if (store && store.NewsletterManager) {
+                            if (store.NewsletterManager.getSubscribedNewsletters) {
+                                const newsletters = await store.NewsletterManager.getSubscribedNewsletters();
+                                for (const nl of newsletters) {
+                                    result.push({
+                                        id: nl.id?._serialized || nl.id,
+                                        name: nl.name || nl.title || 'WhatsApp Channel',
+                                    });
+                                }
                             }
                         }
                     } catch (e) {
@@ -279,27 +355,120 @@ async function ensureTargetAvailable(client, targetId) {
 
     let lastError;
 
-    try {
-        const chat = await client.getChatById(targetId);
-        if (chat) {
-            resolvedTargets.add(targetId);
-            return;
-        }
-    } catch (err) {
-        lastError = err;
-    }
-
-    if (/@newsletter$/i.test(targetId)) {
-        const inviteCode = targetId.replace(/@newsletter$/i, '');
+    // For regular chats and groups, try getChatById
+    if (!/@newsletter$/i.test(targetId)) {
         try {
-            const channel = await client.getChannelByInviteCode(inviteCode);
-            if (channel) {
+            const chat = await client.getChatById(targetId);
+            if (chat) {
                 resolvedTargets.add(targetId);
                 return;
             }
         } catch (err) {
             lastError = err;
         }
+    }
+
+    // For newsletters/channels, use special handling
+    if (/@newsletter$/i.test(targetId)) {
+        const inviteCode = targetId.replace(/@newsletter$/i, '');
+        
+        // First, try to check if we already have access to this newsletter via the Store
+        try {
+            const newsletterInfo = await client.pupPage.evaluate(async (code) => {
+                try {
+                    const store = window.Store;
+                    if (store && store.Newsletter) {
+                        // Try to get the newsletter from the store
+                        const newsletterId = `${code}@newsletter`;
+                        
+                        // Check if we have this newsletter in our followed list
+                        if (store.Newsletter.getNewsletterMetadata) {
+                            const metadata = await store.Newsletter.getNewsletterMetadata(newsletterId);
+                            if (metadata) {
+                                return { found: true, subscribed: true, metadata };
+                            }
+                        }
+                        
+                        // Try to get via newsletter store directly
+                        if (store.Newsletter.newsletters) {
+                            const newsletters = store.Newsletter.newsletters;
+                            const found = newsletters.find(n => n.id?._serialized === newsletterId || n.id === newsletterId);
+                            if (found) {
+                                return { found: true, subscribed: true };
+                            }
+                        }
+                    }
+                    return { found: false };
+                } catch (e) {
+                    return { found: false, error: e.message };
+                }
+            }, inviteCode);
+            
+            if (newsletterInfo && newsletterInfo.found) {
+                logger.info(`Found WhatsApp channel ${inviteCode} in session`);
+                resolvedTargets.add(targetId);
+                return;
+            }
+        } catch (err) {
+            logger.debug(`Newsletter store check failed: ${err.message}`);
+        }
+        
+        // Try to subscribe/follow the newsletter if we don't have access
+        try {
+            logger.info(`Attempting to subscribe to WhatsApp channel: ${inviteCode}`);
+            
+            // Use the internal API to subscribe to the newsletter
+            const subscribeResult = await client.pupPage.evaluate(async (code) => {
+                try {
+                    const store = window.Store;
+                    if (store && store.Newsletter && store.Newsletter.subscribe) {
+                        const newsletterId = `${code}@newsletter`;
+                        await store.Newsletter.subscribe(newsletterId);
+                        return { success: true };
+                    }
+                    
+                    // Alternative: try to join via the GroupUtils or similar
+                    if (store && store.GroupUtils && store.GroupUtils.joinGroupViaInvite) {
+                        const result = await store.GroupUtils.joinGroupViaInvite(code);
+                        return { success: !!result };
+                    }
+                    
+                    return { success: false, reason: 'No subscribe method available' };
+                } catch (e) {
+                    return { success: false, error: e.message };
+                }
+            }, inviteCode);
+            
+            if (subscribeResult && subscribeResult.success) {
+                logger.info(`Successfully subscribed to WhatsApp channel: ${inviteCode}`);
+                resolvedTargets.add(targetId);
+                return;
+            } else {
+                logger.debug(`Subscribe result: ${JSON.stringify(subscribeResult)}`);
+            }
+        } catch (err) {
+            logger.debug(`Newsletter subscribe attempt failed: ${err.message}`);
+        }
+        
+        // Try getChannelByInviteCode as a fallback to at least verify the channel exists
+        try {
+            const channel = await client.getChannelByInviteCode(inviteCode);
+            if (channel) {
+                logger.info(`WhatsApp channel ${inviteCode} verified via invite code`);
+                // Add to resolved targets even if we can't fully verify subscription
+                // The actual send might still work if the user has access
+                resolvedTargets.add(targetId);
+                return;
+            }
+        } catch (err) {
+            lastError = err;
+        }
+        
+        // As a last resort, just add it to resolved targets and try to send anyway
+        // Some channels allow posting even without explicit subscription check
+        logger.warn(`Could not verify WhatsApp channel ${inviteCode}, but will attempt to send anyway.`);
+        resolvedTargets.add(targetId);
+        return;
     }
 
     const message = `WhatsApp target ID "${targetId}" could not be resolved. Make sure it matches a chat, group, or channel you can post to.`;
@@ -315,9 +484,80 @@ function shouldRetrySend(err) {
     return message.includes('Execution context was destroyed') || message.includes('t: t');
 }
 
+/**
+ * Send a message to a WhatsApp newsletter/channel using the internal Store API
+ */
+async function sendNewsletterMessage(client, targetId, content, options) {
+    const inviteCode = targetId.replace(/@newsletter$/i, '');
+    
+    return await client.pupPage.evaluate(async (code, msgContent, msgOptions) => {
+        try {
+            const store = window.Store;
+            const newsletterId = `${code}@newsletter`;
+            
+            // Try different methods to send to a newsletter
+            if (store.Newsletter) {
+                // Method 1: Try sendNewsletterMessage
+                if (store.Newsletter.sendNewsletterMessage) {
+                    const result = await store.Newsletter.sendNewsletterMessage(newsletterId, msgContent, msgOptions);
+                    return { success: true, method: 'sendNewsletterMessage', result };
+                }
+                
+                // Method 2: Try to use the NewsletterManager
+                if (store.NewsletterManager && store.NewsletterManager.sendToNewsletter) {
+                    const result = await store.NewsletterManager.sendToNewsletter(newsletterId, msgContent, msgOptions);
+                    return { success: true, method: 'NewsletterManager', result };
+                }
+                
+                // Method 3: Try to get the newsletter chat and send via Wap
+                if (store.Wap && store.Wap.newsletter) {
+                    const result = await store.Wap.newsletter.sendMessage(newsletterId, msgContent);
+                    return { success: true, method: 'Wap.newsletter', result };
+                }
+            }
+            
+            // Method 4: Try via msgData method
+            if (store.MsgData && store.MsgData.sendNewsletterMsg) {
+                const result = await store.MsgData.sendNewsletterMsg(newsletterId, msgContent);
+                return { success: true, method: 'MsgData', result };
+            }
+            
+            // Method 5: Try to use the addAndSendMsgToChat method
+            if (store.SendMessage && store.SendMessage.addAndSendMsgToChat) {
+                // Create a fake chat object for the newsletter
+                const chat = {
+                    id: newsletterId,
+                    isNewsletter: true
+                };
+                const result = await store.SendMessage.addAndSendMsgToChat(chat, msgContent, msgOptions);
+                return { success: true, method: 'SendMessage', result };
+            }
+            
+            return { success: false, reason: 'No newsletter send method found in Store' };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    }, inviteCode, content, options);
+}
+
 async function sendWithRetry(client, targetId, content, options) {
     const normalizedId = normalizeWhatsAppId(targetId);
     await ensureTargetAvailable(client, normalizedId);
+
+    // For newsletters/channels, try the specialized API first
+    if (/@newsletter$/i.test(normalizedId)) {
+        try {
+            const result = await sendNewsletterMessage(client, normalizedId, content, options);
+            if (result && result.success) {
+                logger.debug(`Newsletter message sent via ${result.method}`);
+                return result.result;
+            }
+            logger.debug(`Newsletter API send result: ${JSON.stringify(result)}`);
+            // Fall through to regular sendMessage as fallback
+        } catch (err) {
+            logger.debug(`Newsletter API send failed: ${err.message}, trying regular sendMessage`);
+        }
+    }
 
     try {
         return await client.sendMessage(normalizedId, content, options);
@@ -369,4 +609,5 @@ module.exports = {
     listChats,
     sendMessage,
     normalizeWhatsAppId,
+    initializeStore,
 };

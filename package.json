@@ -10,6 +10,7 @@
     "restart:pm2": "pm2 restart tg-wa-forwarder",
     "logs:pm2": "pm2 logs tg-wa-forwarder",
     "list-chats": "node src/listChats.js",
+    "follow-channel": "node src/followChannel.js",
     "test": "echo \"No tests defined\" && exit 0"
   },
   "repository": {
