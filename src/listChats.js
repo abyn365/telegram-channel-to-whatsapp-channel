@@ -1,6 +1,6 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, listChats, normalizeWhatsAppId, resolveChannelTargetId, extractInviteCode } = require('./whatsappClient');
+const { createWhatsAppClient, listChats, normalizeWhatsAppId, resolveChannelTargetId, resolveChannelTargetIdFromPage, extractInviteCode } = require('./whatsappClient');
 
 function getChannelUrl(id) {
     if (id.includes('@newsletter')) {
@@ -71,7 +71,8 @@ async function main() {
         const normalizedId = normalizeWhatsAppId(targetId);
         if (normalizedId.includes('@newsletter')) {
             const inviteCode = extractInviteCode(targetId) || normalizedId.replace('@newsletter', '');
-            const resolvedTargetId = await resolveChannelTargetId(client, targetId);
+            let resolvedTargetId = await resolveChannelTargetId(client, targetId);
+            resolvedTargetId = await resolveChannelTargetIdFromPage(client, resolvedTargetId);
             console.log('=== Your Configured Target Channel ===');
             console.log(`Channel ID: ${inviteCode}`);
             console.log(`URL: https://whatsapp.com/channel/${inviteCode}`);

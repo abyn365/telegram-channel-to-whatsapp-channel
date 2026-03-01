@@ -1,6 +1,6 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, normalizeWhatsAppId, resolveChannelTargetId, extractInviteCode } = require('./whatsappClient');
+const { createWhatsAppClient, normalizeWhatsAppId, resolveChannelTargetId, resolveChannelTargetIdFromPage, extractInviteCode } = require('./whatsappClient');
 
 async function followChannel(client, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
@@ -10,7 +10,8 @@ async function followChannel(client, targetId) {
     }
     
     const inviteCode = extractInviteCode(targetId) || normalizedId.replace('@newsletter', '');
-    const channelId = await resolveChannelTargetId(client, targetId);
+    let channelId = await resolveChannelTargetId(client, targetId);
+    channelId = await resolveChannelTargetIdFromPage(client, channelId);
     
     logger.info(`Attempting to follow WhatsApp channel: ${inviteCode}`);
     
@@ -45,7 +46,7 @@ async function followChannel(client, targetId) {
         
         logger.debug(`subscribeToChannel error: ${errorMessage}`);
         
-        return { success: false, error: errorMessage };
+        return { success: false, error: errorMessage, resolvedChannelId: channelId };
     }
 }
 
@@ -75,6 +76,9 @@ async function main() {
             logger.info('Try running the forwarder again.');
         } else {
             logger.error(result.message || result.error || 'Failed to follow channel');
+            if (result.resolvedChannelId) {
+                logger.info(`Resolved channel target used: ${result.resolvedChannelId}`);
+            }
             logger.info('');
             logger.info('=== Manual Follow Instructions ===');
             logger.info('If the automatic follow failed, you can manually follow:');
