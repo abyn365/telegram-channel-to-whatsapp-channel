@@ -14,6 +14,9 @@ const __dirname = path.dirname(__filename);
 const TEMP_DIR = path.join(__dirname, '../temp');
 const TEXT_ONLY_TYPES = new Set(['text', 'webpage', 'poll', 'location', 'contact', 'unknown']);
 
+// DDL Mode: Send Telegram link instead of downloading and re-uploading media
+const DDL_MODE = String(process.env.WHATSAPP_DDL_MODE || 'false').toLowerCase() === 'true';
+
 const SEND_DELAY_MS = parseInt(process.env.SEND_DELAY_MS, 10) || 1500;
 const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE, 10) || 100;
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES, 10) || 3;
@@ -49,6 +52,12 @@ function shouldSendSourceFallback(message, targetId) {
 }
 
 function buildSourceFallbackText(captionText, sourceLink, mediaType) {
+    // If there's a caption, combine it with source link instead of sending separately
+    if (captionText && captionText.trim() && sourceLink) {
+        const mediaLabel = mediaType || 'media';
+        return `${captionText.trim()}\n\n🔗 Source (${mediaLabel}): ${sourceLink}`;
+    }
+
     const parts = [];
     if (captionText && captionText.trim()) {
         parts.push(captionText.trim());
@@ -146,14 +155,15 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
             return;
         }
 
-        logger.info(`Forwarding message id=${message.id} type=${mediaType} from "${channelTitle}"`);
+        logger.info(`Forwarding message id=${message.id} type=${mediaType} from "${channelTitle}" (DDL Mode: ${DDL_MODE})`);
 
         let filePath = null;
         let retryCount = 0;
         let success = false;
 
-        // Download media if needed
-        if (!TEXT_ONLY_TYPES.has(mediaType)) {
+        // In DDL mode, we don't download media - we send the link instead
+        // Only download if not in DDL mode and media type is not text-only
+        if (!DDL_MODE && !TEXT_ONLY_TYPES.has(mediaType)) {
             filePath = await downloadMedia(telegramClient, message, TEMP_DIR);
             if (!filePath) {
                 logger.warn(`Failed to download media for message ${message.id}, will forward text only if available`);
@@ -172,7 +182,9 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         }
 
         const sourceLink = await buildTelegramMessageLink(telegramClient, message);
-        const payload = buildPayload(message, filePath, channelTitle, senderInfo);
+        
+        // In DDL mode, build payload without filePath - we'll send link instead
+        const payload = buildPayload(message, DDL_MODE ? null : filePath, channelTitle, senderInfo);
 
         // Translation
         try {
@@ -192,13 +204,25 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                     await new Promise((res) => setTimeout(res, RETRY_DELAY_MS * retryCount));
                 }
 
-                await sendMessage(whatsappSock, targetId, payload);
+                // In DDL mode, combine text and source link into single message
+                let messagePayload = payload;
+                if (DDL_MODE && sourceLink) {
+                    const combinedText = buildSourceFallbackText(payload.text, sourceLink, mediaType);
+                    messagePayload = {
+                        text: combinedText,
+                        filePath: null,
+                        mediaType: 'text',
+                    };
+                }
+
+                await sendMessage(whatsappSock, targetId, messagePayload);
                 success = true;
 
-                // Send source link as fallback if configured and media exists
+                // Send source link separately only in non-DDL mode when media exists
                 const sendLinkFallback = String(process.env.WHATSAPP_SEND_SOURCE_LINK || 'true').toLowerCase() !== 'false';
-                if (sendLinkFallback && filePath && sourceLink && shouldSendSourceFallback(message, targetId)) {
-                    const fallbackText = buildSourceFallbackText(null, sourceLink, mediaType);
+                if (!DDL_MODE && sendLinkFallback && filePath && sourceLink && shouldSendSourceFallback(message, targetId)) {
+                    // Combine caption with source link instead of sending separately
+                    const fallbackText = buildSourceFallbackText(payload.text, sourceLink, mediaType);
                     if (fallbackText) {
                         try {
                             await sendMessage(whatsappSock, targetId, {
@@ -230,13 +254,15 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                 if (retryCount >= MAX_RETRIES) {
                     logger.error(`Giving up on message ${message.id} after ${MAX_RETRIES} attempts`);
                     
-                    // Try to send a fallback text message
+                    // Try to send a fallback text message with source link combined
                     if (payload.text && payload.text.trim()) {
                         try {
-                            const fallbackText = `[Failed to forward media]\n\n${payload.text}`;
-                            if (sourceLink) {
-                                fallbackText += `\n\n🔗 Source: ${sourceLink}`;
-                            }
+                            // Use the same function for consistency - combine text with source link
+                            const fallbackText = buildSourceFallbackText(
+                                `[Failed to forward media]\n\n${payload.text}`,
+                                sourceLink,
+                                mediaType
+                            );
                             await sendMessage(whatsappSock, targetId, {
                                 text: fallbackText,
                                 filePath: null,
