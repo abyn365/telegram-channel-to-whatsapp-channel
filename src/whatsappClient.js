@@ -328,13 +328,13 @@ async function ensureTargetAvailable(client, targetId) {
             logger.debug(`getChannels check failed: ${err.message}`);
         }
         
-        // Try to get channel by invite code
+        // Try to get channel by invite code and ensure it's loaded
         try {
             const channel = await client.getChannelByInviteCode(inviteCode);
             if (channel) {
-                logger.info(`WhatsApp channel ${inviteCode} found via invite code`);
+                logger.info(`WhatsApp channel ${inviteCode} found via invite code: ${channel.name || 'Unknown'}`);
                 
-                // Check if we need to subscribe
+                // Check if we need to subscribe (required for sending)
                 try {
                     const success = await client.subscribeToChannel(targetId);
                     if (success) {
@@ -345,6 +345,9 @@ async function ensureTargetAvailable(client, targetId) {
                     logger.debug(`Subscribe attempt: ${subErr.message}`);
                 }
                 
+                // Wait a moment for the subscription to take effect
+                await sleep(2000);
+                
                 resolvedTargets.add(targetId);
                 return;
             }
@@ -353,11 +356,12 @@ async function ensureTargetAvailable(client, targetId) {
             logger.debug(`getChannelByInviteCode failed: ${err.message}`);
         }
         
-        // As a last resort, try to subscribe directly
+        // Try to subscribe directly
         try {
             const success = await client.subscribeToChannel(targetId);
             if (success) {
                 logger.info(`Successfully subscribed to WhatsApp channel: ${inviteCode}`);
+                await sleep(2000);
                 resolvedTargets.add(targetId);
                 return;
             }
@@ -384,18 +388,111 @@ function shouldRetrySend(err) {
     return message.includes('Execution context was destroyed') || message.includes('t: t');
 }
 
+/**
+ * Pre-load a channel to ensure it's available in the WhatsApp Web session
+ */
+async function preloadChannel(client, channelId) {
+    const inviteCode = channelId.replace(/@newsletter$/i, '');
+    
+    try {
+        // Try to get channel metadata first
+        const channel = await client.getChannelByInviteCode(inviteCode);
+        if (channel) {
+            logger.debug(`Pre-loaded channel: ${channel.name || inviteCode}`);
+            
+            // Ensure we're subscribed
+            try {
+                await client.subscribeToChannel(channelId);
+                logger.debug(`Subscription confirmed for ${inviteCode}`);
+            } catch (subErr) {
+                // May already be subscribed
+                logger.debug(`Subscription check: ${subErr.message}`);
+            }
+            
+            return true;
+        }
+    } catch (err) {
+        logger.warn(`Could not pre-load channel ${inviteCode}: ${err.message}`);
+    }
+    
+    // Try alternative approach: navigate to the channel in WhatsApp Web
+    try {
+        logger.info(`Attempting to load channel via navigation: ${inviteCode}`);
+        await client.pupPage.goto(`https://web.whatsapp.com/channel/${inviteCode}`, {
+            waitUntil: 'networkidle2',
+            timeout: 30000
+        });
+        await sleep(3000);
+        
+        // Verify the channel loaded
+        const channelUrl = client.pupPage.url();
+        if (channelUrl.includes(inviteCode) || channelUrl.includes('channel')) {
+            logger.info(`Successfully navigated to channel in WhatsApp Web`);
+            
+            // Try to subscribe again
+            try {
+                await client.subscribeToChannel(channelId);
+            } catch (subErr) {
+                logger.debug(`Post-navigation subscribe: ${subErr.message}`);
+            }
+            
+            return true;
+        }
+    } catch (navErr) {
+        logger.warn(`Navigation approach failed: ${navErr.message}`);
+    }
+    
+    return false;
+}
+
 async function sendWithRetry(client, targetId, content, options) {
     const normalizedId = normalizeWhatsAppId(targetId);
+    
+    // For channels, try to pre-load before ensuring target
+    if (normalizedId.includes('@newsletter')) {
+        await preloadChannel(client, normalizedId);
+        await sleep(1000);
+    }
+    
     await ensureTargetAvailable(client, normalizedId);
 
     try {
         return await client.sendMessage(normalizedId, content, options);
     } catch (err) {
+        const errMsg = err?.message || '';
+        
+        // Handle specific channel errors
+        if (errMsg.includes('t: t') || errMsg.includes('Evaluation failed')) {
+            const inviteCode = normalizedId.replace('@newsletter', '');
+            logger.error('');
+            logger.error('=== CHANNEL SEND ERROR ===');
+            logger.error(`Channel ID: ${inviteCode}`);
+            logger.error('This error usually means the channel is not properly followed/loaded.');
+            logger.error('');
+            logger.error('TO FIX THIS ISSUE:');
+            logger.error('');
+            logger.error('Option 1 - Follow via command line:');
+            logger.error(`  npm run follow-channel https://whatsapp.com/channel/${inviteCode}`);
+            logger.error('');
+            logger.error('Option 2 - Follow manually in WhatsApp:');
+            logger.error('  1. Open WhatsApp on your phone');
+            logger.error('  2. Go to Updates tab → Channels');
+            logger.error('  3. Search for your channel and tap "Follow"');
+            logger.error('  4. Restart the forwarder');
+            logger.error('');
+            logger.error('IMPORTANT: Even as a channel admin/owner, you must "Follow"');
+            logger.error('your own channel for the WhatsApp Web session to see and post to it.');
+            logger.error('');
+            throw new Error(`Failed to send to WhatsApp channel. Channel not properly followed. Run: npm run follow-channel https://whatsapp.com/channel/${inviteCode}`);
+        }
+        
         if (!shouldRetrySend(err)) {
             throw err;
         }
-        logger.warn(`WhatsApp send failed (${err.message}). Retrying once...`);
+        logger.warn(`WhatsApp send failed (${errMsg}). Retrying once...`);
         resolvedTargets.delete(normalizedId);
+        await preloadChannel(client, normalizedId);
+        await sleep(2000);
         await ensureTargetAvailable(client, normalizedId);
         return client.sendMessage(normalizedId, content, options);
     }
