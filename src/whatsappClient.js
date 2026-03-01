@@ -244,21 +244,23 @@ async function sendText(sock, targetId, text) {
 
 async function sendMediaFile(sock, targetId, filePath, caption) {
     const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
     const fileBuffer = await fs.readFile(filePath);
     const filename = path.basename(filePath);
+    const mediaSource = isNewsletter ? { url: filePath } : fileBuffer;
 
     let messageContent;
 
     if (mimeType.startsWith('image/') && mimeType !== 'image/gif') {
         messageContent = {
-            image: fileBuffer,
+            image: mediaSource,
             caption: caption || '',
             mimetype: mimeType,
         };
     } else if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
         messageContent = {
-            video: fileBuffer,
+            video: mediaSource,
             caption: caption || '',
             mimetype: mimeType.startsWith('image/') ? 'video/mp4' : mimeType,
             gifPlayback: mimeType === 'image/gif',
@@ -266,13 +268,13 @@ async function sendMediaFile(sock, targetId, filePath, caption) {
     } else if (mimeType.startsWith('audio/')) {
         const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
         messageContent = {
-            audio: fileBuffer,
+            audio: mediaSource,
             mimetype: mimeType,
             ptt: isPtt,
         };
     } else {
         messageContent = {
-            document: fileBuffer,
+            document: mediaSource,
             mimetype: mimeType,
             fileName: filename,
             caption: caption || '',
@@ -295,9 +297,10 @@ async function sendMediaFile(sock, targetId, filePath, caption) {
 
 async function sendStickerFile(sock, targetId, filePath) {
     const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
     const fileBuffer = await fs.readFile(filePath);
     await sock.sendMessage(jid, {
-        sticker: fileBuffer,
+        sticker: isNewsletter ? { url: filePath } : fileBuffer,
         mimetype: 'image/webp',
     });
 }
