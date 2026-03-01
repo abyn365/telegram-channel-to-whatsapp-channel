@@ -422,7 +422,7 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     const fileBuffer = await fs.readFile(filePath);
     
     // Determine media mode
-    const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'native').trim().toLowerCase();
+    const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'hybrid').trim().toLowerCase();
     
     logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), mode: ${mediaMode}`);
     
@@ -434,7 +434,6 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
 
     // Strategy: Try native first, then fallback to document based on mode
     const strategies = [];
-    const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'hybrid').trim().toLowerCase();
     
     if (isNewsletter) {
         if (mediaMode === 'document') {
