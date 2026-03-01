@@ -1,10 +1,6 @@
-import { fileURLToPath } from 'url';
-import path from 'path';
+const path = require('path');
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-export default {
+module.exports = {
     apps: [
         {
             name: 'tg-wa-translator',
