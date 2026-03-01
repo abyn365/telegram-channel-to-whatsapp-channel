@@ -236,10 +236,19 @@ async function resolveNewsletterJid(sock, targetId) {
     return normalizedId;
 }
 
+
+function assertWhatsAppSendResult(result, jid, contextLabel) {
+    const messageId = result?.key?.id || result?.key?.remoteJid || result?.status;
+    if (!messageId) {
+        throw new Error(`WhatsApp returned an empty send result for ${contextLabel} -> ${jid}`);
+    }
+}
+
 async function sendText(sock, targetId, text) {
     if (!text || !text.trim()) return;
     const jid = await resolveNewsletterJid(sock, targetId);
-    await sock.sendMessage(jid, { text });
+    const result = await sock.sendMessage(jid, { text });
+    assertWhatsAppSendResult(result, jid, 'text');
 }
 
 const NEWSLETTER_MEDIA_MODE = (process.env.NEWSLETTER_MEDIA_MODE || 'document').trim().toLowerCase();
@@ -298,20 +307,23 @@ async function sendMediaFile(sock, targetId, filePath, caption) {
     );
 
     try {
-        await sock.sendMessage(jid, messageContent);
+        const result = await sock.sendMessage(jid, messageContent);
+        assertWhatsAppSendResult(result, jid, "media");
     } catch (err) {
         // If sending with caption fails, try without caption as fallback
         if (caption && err.message?.includes('caption')) {
             logger.warn(`Failed to send media with caption, retrying without caption...`);
             delete messageContent.caption;
-            await sock.sendMessage(jid, messageContent);
+            const retryResult = await sock.sendMessage(jid, messageContent);
+            assertWhatsAppSendResult(retryResult, jid, "media-retry-no-caption");
             return;
         }
 
         if (isNewsletter && !forceDocumentForNewsletter) {
             logger.warn(`Newsletter media send failed (${err.message}). Retrying as document...`);
             const docContent = buildMediaMessageContent(filePath, mimeType, mediaSource, caption || '', true);
-            await sock.sendMessage(jid, docContent);
+            const docResult = await sock.sendMessage(jid, docContent);
+            assertWhatsAppSendResult(docResult, jid, "media-retry-document");
             return;
         }
 
@@ -323,10 +335,11 @@ async function sendStickerFile(sock, targetId, filePath) {
     const jid = await resolveNewsletterJid(sock, targetId);
     const isNewsletter = /@newsletter$/i.test(jid);
     const fileBuffer = await fs.readFile(filePath);
-    await sock.sendMessage(jid, {
+    const result = await sock.sendMessage(jid, {
         sticker: isNewsletter ? { url: filePath } : fileBuffer,
         mimetype: 'image/webp',
     });
+    assertWhatsAppSendResult(result, jid, 'sticker');
 }
 
 async function sendMessage(sock, targetId, payload) {
