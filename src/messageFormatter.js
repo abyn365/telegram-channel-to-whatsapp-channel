@@ -66,7 +66,8 @@ function buildPayload(message, filePath, channelTitle, senderInfo) {
     const prefix = process.env.MESSAGE_PREFIX || '';
     const text = buildCaption(message, channelTitle, prefix, senderInfo);
     const mediaType = getMediaType(message);
-    return { text, filePath, mediaType };
+    const rawText = extractText(message);
+    return { text, filePath, mediaType, rawText };
 }
 
 export { buildPayload };
