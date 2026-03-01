@@ -82,7 +82,12 @@ TELEGRAM_PHONE=+1234567890
 TELEGRAM_CHANNELS=@mychannel,@anotherchannel
 
 # WhatsApp target (channel or group ID — see Step 4)
-WHATSAPP_TARGET_ID=120363xxxxxxxxxx@newsletter
+# For WhatsApp Channels:
+#   - Full URL: https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
+#   - Or just the channel ID: 0029Vb7T8V460eBW2gKeNC1x
+#   - The code automatically adds @newsletter suffix
+# For Groups: 120363xxxxxxxxxx@g.us
+WHATSAPP_TARGET_ID=
 
 # Optional
 MESSAGE_PREFIX=
@@ -123,7 +128,17 @@ After WhatsApp is connected, **Ctrl+C** to stop, then run:
 npm run list-chats
 ```
 
-This prints all available chats with their IDs. Copy the correct ID into `WHATSAPP_TARGET_ID` in `.env`.
+This prints all available chats with their IDs, organized by type:
+- **WhatsApp Channels** - shown with `[CHANNEL]` and the WhatsApp channel URL
+- **Groups** - shown with `[GROUP]`
+- **Chats** - shown with `[CHAT]`
+
+Copy the ID into `WHATSAPP_TARGET_ID` in `.env`. For WhatsApp channels, you can use:
+- The full URL: `https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x`
+- Or just the channel ID: `0029Vb7T8V460eBW2gKeNC1x`
+- The code will automatically convert it to the correct format
+
+**Note:** To forward to a WhatsApp Channel, your WhatsApp account must be an admin of that channel.
 
 ---
 
