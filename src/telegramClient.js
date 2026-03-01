@@ -6,12 +6,16 @@ import readline from 'readline';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import mime from 'mime-types';
 import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const SESSION_FILE = path.join(__dirname, '../sessions/telegram.session');
+
+// Track download progress for large files
+const downloadProgressCallbacks = new Map();
 
 async function promptInput(question) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -53,10 +57,12 @@ async function createTelegramClient() {
 
     const session = await loadSession();
     const client = new TelegramClient(session, apiId, apiHash, {
-        connectionRetries: 5,
+        connectionRetries: 10,
         retryDelay: 3000,
         autoReconnect: true,
         useWSS: false,
+        requestRetries: 5,
+        downloadRetries: 3,
     });
 
     await client.start({
@@ -68,6 +74,15 @@ async function createTelegramClient() {
 
     await saveSession(client);
     logger.info('Telegram userbot connected successfully.');
+    
+    // Log some info about the connected user
+    try {
+        const me = await client.getMe();
+        logger.info(`Logged in as: ${me.firstName || ''} ${me.lastName || ''} (@${me.username || 'N/A'})`);
+    } catch {
+        // ignore
+    }
+    
     return client;
 }
 
@@ -106,6 +121,8 @@ async function resolveChannelEntities(client, channels) {
                 channelTitles[idValue] = title;
                 channelTitles[`-100${idValue}`] = title;
             }
+            
+            logger.debug(`Resolved channel "${raw}" -> "${title}" (ID: ${entity.id})`);
         } catch (err) {
             logger.warn(`Failed to resolve Telegram channel "${raw}": ${err.message || err}`);
         }
@@ -118,8 +135,10 @@ async function resolveChannelEntities(client, channels) {
     return { channelEntities, channelTitles };
 }
 
+// Improved media download with better error handling and progress logging
 async function downloadMedia(client, message, tempDir) {
     const maxBytes = (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 50) * 1024 * 1024;
+    const downloadTimeout = parseInt(process.env.MEDIA_DOWNLOAD_TIMEOUT_MS, 10) || 300000; // 5 minutes default
     let media = message.media;
     if (!media) return null;
 
@@ -127,26 +146,45 @@ async function downloadMedia(client, message, tempDir) {
         let fileSize = 0;
         let fileName = 'media_file';
         let ext = '';
+        let mimeType = 'application/octet-stream';
 
         if (media.photo) {
+            // Photos - determine best size to download
             ext = '.jpg';
             fileName = `photo_${message.id}${ext}`;
+            mimeType = 'image/jpeg';
         } else if (media.document) {
             const doc = media.document;
             fileSize = doc.size || 0;
+            
             if (fileSize > maxBytes) {
-                logger.warn(`Skipping file — size ${fileSize} exceeds limit.`);
+                logger.warn(`Skipping file — size ${(fileSize / 1024 / 1024).toFixed(2)} MB exceeds limit of ${maxBytes / 1024 / 1024} MB`);
                 return null;
             }
+            
+            mimeType = doc.mimeType || 'application/octet-stream';
+            
+            // Try to get filename from document attributes
             const nameAttr = doc.attributes?.find((a) => a.fileName);
             const rawName = nameAttr?.fileName || `document_${message.id}`;
-            fileName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
-            if (!path.extname(fileName)) {
-                const mime = doc.mimeType || '';
-                const mimeExt = (await import('mime-types')).extension(mime);
-                if (mimeExt) fileName += `.${mimeExt}`;
+            
+            // Sanitize filename but preserve extension
+            const parsedPath = path.parse(rawName);
+            const sanitizedName = parsedPath.name.replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 100);
+            ext = parsedPath.ext || '';
+            
+            // Determine extension from MIME type if not present
+            if (!ext) {
+                const mimeExt = mime.extension(mimeType);
+                if (mimeExt) ext = `.${mimeExt}`;
             }
+            
+            fileName = `${sanitizedName}${ext}`;
+            
+            // Log document info
+            logger.debug(`Document: ${fileName}, MIME: ${mimeType}, Size: ${(fileSize / 1024).toFixed(2)} KB`);
         } else if (media.webpage) {
+            // Webpage previews - don't download
             return null;
         } else {
             return null;
@@ -154,12 +192,35 @@ async function downloadMedia(client, message, tempDir) {
 
         await fs.ensureDir(tempDir);
         const destPath = path.join(tempDir, fileName);
-        logger.info(`Downloading media: ${fileName}`);
+        
+        // Check if file already exists (from grouped media)
+        if (await fs.pathExists(destPath)) {
+            const existingStat = await fs.stat(destPath);
+            if (existingStat.size > 0) {
+                logger.debug(`Media file already exists: ${destPath}`);
+                return destPath;
+            }
+        }
 
-        // Add timeout for large media downloads
-        const downloadPromise = client.downloadMedia(message, { workers: 4 });
+        logger.info(`Downloading media: ${fileName} (${fileSize > 0 ? `${(fileSize / 1024 / 1024).toFixed(2)} MB` : 'unknown size'})`);
+
+        // Download with progress callback for large files
+        const downloadStartTime = Date.now();
+        
+        const downloadPromise = client.downloadMedia(message, { 
+            workers: 4,
+            progressCallback: (downloaded, total) => {
+                if (total > 0 && total > 5 * 1024 * 1024) { // Log progress for files > 5MB
+                    const percent = ((downloaded / total) * 100).toFixed(1);
+                    const elapsed = (Date.now() - downloadStartTime) / 1000;
+                    const speed = elapsed > 0 ? (downloaded / 1024 / 1024 / elapsed).toFixed(2) : 0;
+                    logger.debug(`Download progress: ${percent}% (${speed} MB/s)`);
+                }
+            }
+        });
+        
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Media download timeout after 5 minutes')), 300000);
+            setTimeout(() => reject(new Error(`Media download timeout after ${downloadTimeout / 1000} seconds`)), downloadTimeout);
         });
 
         const buffer = await Promise.race([downloadPromise, timeoutPromise]);
@@ -170,12 +231,58 @@ async function downloadMedia(client, message, tempDir) {
         }
 
         await fs.writeFile(destPath, buffer);
-        logger.info(`Media saved to ${destPath} (${buffer.length} bytes)`);
+        const elapsed = ((Date.now() - downloadStartTime) / 1000).toFixed(2);
+        logger.info(`Media saved: ${destPath} (${(buffer.length / 1024 / 1024).toFixed(2)} MB in ${elapsed}s)`);
+        
         return destPath;
     } catch (err) {
         logger.error(`Failed to download media for message ${message.id}:`, err.message || err);
         return null;
     }
+}
+
+// Get media metadata for better handling
+function getMediaMetadata(message) {
+    const media = message.media;
+    if (!media) return null;
+    
+    const metadata = {
+        type: getMediaType(message),
+        mimeType: null,
+        fileName: null,
+        fileSize: null,
+        width: null,
+        height: null,
+        duration: null,
+    };
+    
+    if (media.document) {
+        const doc = media.document;
+        metadata.mimeType = doc.mimeType || 'application/octet-stream';
+        metadata.fileSize = doc.size || 0;
+        
+        // Try to get filename
+        const nameAttr = doc.attributes?.find((a) => a.fileName);
+        if (nameAttr) metadata.fileName = nameAttr.fileName;
+        
+        // Get dimensions for images/videos
+        const videoAttr = doc.attributes?.find((a) => a.className === 'DocumentAttributeVideo');
+        const imageAttr = doc.attributes?.find((a) => a.className === 'DocumentAttributeImageSize');
+        
+        if (videoAttr) {
+            metadata.width = videoAttr.w || null;
+            metadata.height = videoAttr.h || null;
+            metadata.duration = videoAttr.duration || null;
+        } else if (imageAttr) {
+            metadata.width = imageAttr.w || null;
+            metadata.height = imageAttr.h || null;
+        }
+    } else if (media.photo) {
+        metadata.mimeType = 'image/jpeg';
+        metadata.type = 'photo';
+    }
+    
+    return metadata;
 }
 
 
@@ -258,6 +365,7 @@ function extractSenderInfo(message, client) {
     const info = {
         name: null,
         phone: null,
+        username: null,
     };
 
     if (message.postAuthor) {
@@ -269,6 +377,15 @@ function extractSenderInfo(message, client) {
         if (fromIdStr.startsWith('user')) {
             const userId = fromIdStr.replace('user', '');
             info.phone = userId;
+        }
+    }
+
+    // Try to get sender from forward info
+    if (message.forward) {
+        if (message.forward.sender) {
+            info.name = message.forward.sender.title || message.forward.sender.username || info.name;
+        } else if (message.forward.fromName) {
+            info.name = message.forward.fromName;
         }
     }
 
@@ -285,7 +402,7 @@ async function getSenderName(client, fromId) {
                 const fullName = [entity.firstName, entity.lastName].filter(Boolean).join(' ');
                 return fullName || entity.username || null;
             }
-            return entity.username || null;
+            return entity.username || entity.title || null;
         }
     } catch {
         // ignore
@@ -412,6 +529,7 @@ export {
     extractText,
     extractWebPageUrl,
     getMediaType,
+    getMediaMetadata,
     getPollText,
     getLocationText,
     getContactText,

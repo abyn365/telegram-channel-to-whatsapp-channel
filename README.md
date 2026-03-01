@@ -9,8 +9,8 @@ Supports all major Telegram content types:
 | Type | Forwarded as |
 |---|---|
 | Text messages | Text message |
-| Photos | Image + caption |
-| Videos | Video + caption |
+| Photos | **Native image** (viewable in-app) + caption |
+| Videos | **Native video** (viewable in-app) + caption |
 | Audio / Voice | Audio file |
 | Documents / Files | File attachment + caption |
 | Animated GIFs | Video (gifPlayback) |
@@ -19,6 +19,18 @@ Supports all major Telegram content types:
 | Polls | Formatted text |
 | Locations | Google Maps link |
 | Contacts | Formatted text |
+
+---
+
+## ✨ Key Features
+
+- **🖼️ Native Media Viewing**: Images and videos are sent as native WhatsApp media that can be viewed directly in the app (not as downloadable documents)
+- **📝 Caption Support**: Full caption support for all media types - captions are properly attached to images/videos
+- **🔄 Smart Fallback**: If native media fails, automatically retries with alternative methods
+- **⚡ Production Ready**: Health monitoring, automatic reconnection, graceful shutdown, and comprehensive error handling
+- **🌐 Translation Support**: Optional automatic translation to Indonesian (or any language) via LibreTranslate
+- **📊 Queue Management**: Message queue with rate limiting to avoid WhatsApp bans
+- **🔍 Deduplication**: Prevents duplicate message forwarding
 
 ---
 
@@ -64,28 +76,25 @@ TELEGRAM_CHANNELS=@mychannel,@anotherchannel
 # WhatsApp target (channel JID or group JID — see Step 3)
 WHATSAPP_TARGET_ID=120363282083849178@newsletter
 
-# Optional
-MESSAGE_PREFIX=
+# Optional - Media settings
+NEWSLETTER_MEDIA_MODE=native  # "native" for in-app viewing, "document" for files
 MAX_FILE_SIZE_MB=50
 SEND_DELAY_MS=1500
-LOG_LEVEL=info
-# For WhatsApp channels/newsletters: "document" (default) or "native"
-NEWSLETTER_MEDIA_MODE=document
-# Telegram polling fallback (helps when some channels are missed by event updates)
-TELEGRAM_POLLING_ENABLED=true
-TELEGRAM_POLL_INTERVAL_MS=15000
-# Send Telegram source link as extra text for media messages (recommended for newsletter media issues)
-WHATSAPP_SEND_SOURCE_LINK=true
-# Indonesian translation (LibreTranslate)
+
+# Optional - Translation
 TRANSLATE_TO_ID=true
 LIBRETRANSLATE_URL=http://127.0.0.1:5000/translate
-TRANSLATE_SOURCE=auto
-TRANSLATE_TARGET=id
-TRANSLATION_PREFIX=id
-TRANSLATION_TIMEOUT_MS=8000
-# If message has no raw text, translate caption as fallback
-TRANSLATE_USE_CAPTION_WHEN_EMPTY=true
 ```
+
+### Important Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `NEWSLETTER_MEDIA_MODE` | How to send media to WhatsApp channels: `native` (viewable in-app) or `document` (downloadable file) | `native` |
+| `WHATSAPP_SEND_SOURCE_LINK` | Include link to original Telegram message | `true` |
+| `MAX_RETRIES` | Number of retry attempts for failed messages | `3` |
+| `SEND_DELAY_MS` | Delay between messages to avoid rate limits | `1500` |
+| `HEALTH_CHECK_INTERVAL_MS` | How often to check connection health | `60000` |
 
 ---
 
@@ -136,7 +145,7 @@ npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
 npm start
 ```
 
-> Jika `TRANSLATE_TO_ID=true`, command ini juga otomatis menyalakan LibreTranslate lokal lewat virtualenv `.venv-libretranslate` (tanpa `pip install` global).
+> If `TRANSLATE_TO_ID=true`, this command also starts LibreTranslate locally via virtualenv `.venv-libretranslate`.
 
 ### Telegram
 You will be prompted for:
@@ -160,7 +169,7 @@ npm install -g pm2
 npm run start:pm2
 ```
 
-Perintah PM2 di atas akan menjalankan **2 proses**:
+The PM2 command above runs **2 processes**:
 - `tg-wa-translator` (LibreTranslate)
 - `tg-wa-forwarder` (Telegram → WhatsApp bridge)
 
@@ -182,17 +191,59 @@ pm2 save
 
 ---
 
-## 6 · Directory Structure
+## 6 · Media Handling
+
+### Native Media (Recommended)
+
+By default, `NEWSLETTER_MEDIA_MODE=native` sends images and videos as native WhatsApp media that users can view directly in the app:
+
+- **Images**: Display inline, tap to view full size
+- **Videos**: Play directly in the chat
+- **Captions**: Attached to the media (for regular chats) or sent as separate message (for channels)
+
+### Document Mode
+
+If you experience issues with native media, set `NEWSLETTER_MEDIA_MODE=document` to send all media as downloadable files.
+
+### Caption Handling
+
+The system handles captions intelligently:
+
+1. **Regular chats**: Caption is attached directly to the media
+2. **Channels**: Caption is sent as a separate text message after the media (due to WhatsApp channel limitations)
+3. **Fallback**: If media fails to send, the caption text is still delivered
+
+---
+
+## 7 · Health Monitoring
+
+The forwarder includes built-in health monitoring:
+
+- **Connection Health**: Checks WhatsApp and Telegram connection status every minute
+- **Queue Status**: Monitors message queue size and processing statistics
+- **Automatic Reconnection**: Reconnects automatically with exponential backoff
+- **Memory Monitoring**: Optional periodic memory usage logging (`LOG_MEMORY_USAGE=true`)
+
+View health status in logs:
+```
+Health check: Telegram=OK, WhatsApp=OK, Queue=0 pending, 42 processed, 0 failed
+```
+
+---
+
+## 8 · Directory Structure
 
 ```
 .
 ├── src/
-│   ├── index.js            # Entry point
+│   ├── index.js            # Entry point, health monitoring
 │   ├── telegramClient.js   # GramJS userbot, media download, event listener
-│   ├── whatsappClient.js   # Baileys WebSocket client, send helpers
+│   ├── whatsappClient.js   # Baileys WebSocket client, native media support
 │   ├── forwarder.js        # Message queue + download → format → send pipeline
 │   ├── messageFormatter.js # Builds WhatsApp message text/caption
 │   ├── logger.js           # Winston logger (console + file)
+│   ├── forwardedStore.js   # Deduplication store
+│   ├── translator.js       # LibreTranslate integration
 │   ├── listChats.js        # Utility: look up WhatsApp channel/group IDs
 │   └── followChannel.js    # Utility: follow/subscribe to a WhatsApp channel
 ├── sessions/
@@ -207,7 +258,7 @@ pm2 save
 
 ---
 
-## 7 · Troubleshooting
+## 9 · Troubleshooting
 
 | Problem | Solution |
 |---|---|
@@ -219,10 +270,13 @@ pm2 save
 | Channel not found | Run `npm run list-chats <channel-url>` to resolve the JID |
 | Messages too fast / rate limited | Increase `SEND_DELAY_MS` in `.env` (default: 1500) |
 | Cannot post to channel | Your WhatsApp account must be an admin of the newsletter |
+| Media sent as document | Set `NEWSLETTER_MEDIA_MODE=native` in `.env` |
+| Captions not showing | For channels, captions are sent as separate messages |
+| Translation not working | Ensure LibreTranslate is running on the configured URL |
 
 ---
 
-## 8 · Why Baileys instead of whatsapp-web.js?
+## 10 · Why Baileys instead of whatsapp-web.js?
 
 | | whatsapp-web.js | **Baileys** |
 |---|---|---|
@@ -235,12 +289,13 @@ pm2 save
 
 ---
 
-## 9 · Notes
+## 11 · Notes
 
 - **WhatsApp channels** require the linked account to be the channel admin/owner to post messages.
 - **WhatsApp groups** work with any member account.
 - This project uses the unofficial WhatsApp Web protocol — use at your own risk.
 - Telegram API requires a real user account (userbot), not a bot token.
+- For best results with channels, use `NEWSLETTER_MEDIA_MODE=native` (default).
 
 ---
 
@@ -250,7 +305,7 @@ GPL-3.0 © [abyn365](https://github.com/abyn365)
 
 ---
 
-## 10 · Translation (LibreTranslate)
+## 12 · Translation (LibreTranslate)
 
 Run LibreTranslate locally:
 
@@ -261,9 +316,9 @@ pip install libretranslate
 libretranslate --host 0.0.0.0 --port 5000
 ```
 
-Untuk Ubuntu/Debian dengan error `externally-managed-environment`, **jangan** install global via `pip install libretranslate`; gunakan virtualenv seperti di atas (atau biarkan `npm start`/PM2 yang membuat virtualenv otomatis).
+For Ubuntu/Debian with `externally-managed-environment` error, **don't** install globally via `pip install libretranslate`; use virtualenv as above (or let `npm start`/PM2 create it automatically).
 
-Jika venv gagal dibuat, install paket sistem: `apt install python3-venv`.
+If venv fails to be created, install system packages: `apt install python3-venv`.
 
 Quick API check:
 
