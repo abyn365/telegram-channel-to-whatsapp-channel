@@ -31,14 +31,14 @@ async function main() {
 
     await checkNewsletterAccess(whatsappSock, targetId);
 
-    const { channelTitles } = await resolveChannelEntities(telegramClient, channels);
+    const { channelEntities, channelTitles } = await resolveChannelEntities(telegramClient, channels);
 
     for (const ch of channels) {
         const title = channelTitles[ch] || channelTitles[ch.replace(/^@/, '')] || '';
         logger.info(`Watching Telegram channel: ${ch} → "${title || 'Unknown'}"`);
     }
 
-    startListener(telegramClient, channels, async (message) => {
+    startListener(telegramClient, channelEntities, async (message) => {
         const chatKey = String(
             message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || ''
         );

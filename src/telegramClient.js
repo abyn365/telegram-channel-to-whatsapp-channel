@@ -156,14 +156,24 @@ async function downloadMedia(client, message, tempDir) {
         const destPath = path.join(tempDir, fileName);
         logger.info(`Downloading media: ${fileName}`);
 
-        const buffer = await client.downloadMedia(message, { workers: 4 });
-        if (!buffer || buffer.length === 0) return null;
+        // Add timeout for large media downloads
+        const downloadPromise = client.downloadMedia(message, { workers: 4 });
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Media download timeout after 5 minutes')), 300000);
+        });
+
+        const buffer = await Promise.race([downloadPromise, timeoutPromise]);
+
+        if (!buffer || buffer.length === 0) {
+            logger.warn(`Downloaded media buffer is empty for message ${message.id}`);
+            return null;
+        }
 
         await fs.writeFile(destPath, buffer);
-        logger.info(`Media saved to ${destPath}`);
+        logger.info(`Media saved to ${destPath} (${buffer.length} bytes)`);
         return destPath;
     } catch (err) {
-        logger.error('Failed to download media:', err);
+        logger.error(`Failed to download media for message ${message.id}:`, err.message || err);
         return null;
     }
 }
@@ -242,11 +252,11 @@ function extractSenderInfo(message, client) {
     return info;
 }
 
-function getSenderName(client, fromId) {
+async function getSenderName(client, fromId) {
     if (!fromId) return null;
-    
+
     try {
-        const entity = client.getEntity(fromId);
+        const entity = await client.getEntity(fromId);
         if (entity) {
             if (entity.firstName) {
                 const fullName = [entity.firstName, entity.lastName].filter(Boolean).join(' ');
@@ -261,6 +271,13 @@ function getSenderName(client, fromId) {
 }
 
 function startListener(client, channelFilters, onMessage, channelLabels = channelFilters) {
+    // Extract entity IDs for filtering - supports both entity objects and strings
+    const chatIds = channelFilters.map((channel) => {
+        if (typeof channel === 'string') return channel;
+        if (channel?.id) return channel.id;
+        return channel;
+    }).filter(Boolean);
+
     client.addEventHandler(async (event) => {
         try {
             const msg = event.message;
@@ -269,7 +286,7 @@ function startListener(client, channelFilters, onMessage, channelLabels = channe
         } catch (err) {
             logger.error('Error handling Telegram message event:', err);
         }
-    }, new NewMessage({ chats: channelFilters }));
+    }, new NewMessage({ chats: chatIds }));
 
     const labels = (channelLabels || []).map((channel) => {
         if (typeof channel === 'string') return channel;
