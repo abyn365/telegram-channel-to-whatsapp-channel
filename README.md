@@ -194,6 +194,7 @@ pm2 save           # save current process list
 | Large files not forwarded | Increase `MAX_FILE_SIZE_MB` or WhatsApp's 100 MB limit applies |
 | Session expired (WhatsApp) | Delete `sessions/whatsapp/` and re-scan QR |
 | Session expired (Telegram) | Delete `sessions/telegram.session` and re-login |
+| `TargetCloseError: Protocol error` or `Session closed` | Usually caused by Chrome resource issues. The app now auto-detects Chrome/Chromium. Ensure you have enough RAM (at least 1GB free) and Chrome is installed properly. Try running again. |
 
 ---
 
