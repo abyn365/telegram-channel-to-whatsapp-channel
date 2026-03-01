@@ -1,8 +1,13 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createTelegramClient, resolveChannelTargets, startListener } = require('./telegramClient');
+const {
+    createTelegramClient,
+    resolveChannelTargets,
+    resolveChannelEntities,
+    startListener,
+} = require('./telegramClient');
 const { createWhatsAppClient } = require('./whatsappClient');
-const { forwardMessage, resolveChannelTitle } = require('./forwarder');
+const { forwardMessage } = require('./forwarder');
 
 async function main() {
     logger.info('Starting Telegram → WhatsApp forwarder...');
@@ -21,20 +26,24 @@ async function main() {
     logger.info('Connecting to WhatsApp...');
     const whatsappClient = await createWhatsAppClient();
 
-    const channelTitles = {};
+    const { channelEntities, channelTitles } = await resolveChannelEntities(telegramClient, channels);
+
     for (const ch of channels) {
-        channelTitles[ch] = await resolveChannelTitle(telegramClient, ch);
-        logger.info(`Watching channel: ${ch} → "${channelTitles[ch]}"`);
+        const title = channelTitles[ch] || channelTitles[ch.replace(/^@/, '')] || '';
+        logger.info(`Watching channel: ${ch} → "${title || 'Unknown'}"`);
     }
 
-    startListener(telegramClient, channels, async (message) => {
-        const chatKey = String(message.peerId?.channelId || message.peerId?.chatId || '');
-        const titleByPeer = channelTitles[chatKey] || '';
+    startListener(telegramClient, channelEntities, async (message) => {
+        const chatKey = String(message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || '');
+        const titleByPeer = channelTitles[chatKey] || channelTitles[`-100${chatKey}`] || '';
 
         let title = titleByPeer;
         if (!title) {
-            for (const [key, val] of Object.entries(channelTitles)) {
-                if (val) { title = val; break; }
+            for (const val of Object.values(channelTitles)) {
+                if (val) {
+                    title = val;
+                    break;
+                }
             }
         }
 
