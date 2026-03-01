@@ -1,143 +1,84 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, listChats, normalizeWhatsAppId, resolveChannelTargetId, resolveChannelTargetIdFromPage, extractInviteCode } = require('./whatsappClient');
-
-function getChannelUrl(id) {
-    if (id.includes('@newsletter')) {
-        const channelId = id.replace('@newsletter', '');
-        return `https://whatsapp.com/channel/${channelId}`;
-    }
-    return null;
-}
+const {
+    createWhatsAppClientWithReconnect,
+    normalizeWhatsAppId,
+    extractInviteCode,
+    resolveNewsletterJid,
+} = require('./whatsappClient');
 
 async function main() {
     logger.info('Connecting to WhatsApp to list available chats...');
-    const client = await createWhatsAppClient();
+    const sock = await createWhatsAppClientWithReconnect();
 
-    let chats = [];
-    try {
-        chats = await listChats(client);
-    } catch (err) {
-        logger.error('Error listing chats:', err.message);
-    }
+    const manualTarget = process.argv[2] || process.env.WHATSAPP_TARGET_ID;
 
-    const manualTarget = process.argv[2];
+    console.log('\n=== WhatsApp Channel / Group Info ===\n');
+
     if (manualTarget) {
-        const normalizedManual = normalizeWhatsAppId(manualTarget);
-        if (normalizedManual.includes('@newsletter')) {
-            const inviteCode = extractInviteCode(manualTarget) || normalizedManual.replace('@newsletter', '');
-            let resolvedManual = await resolveChannelTargetId(client, manualTarget);
-            resolvedManual = await resolveChannelTargetIdFromPage(client, resolvedManual);
+        const normalizedId = normalizeWhatsAppId(manualTarget);
+        const inviteCode = extractInviteCode(manualTarget);
 
-            if (!chats.find((c) => c.id === resolvedManual)) {
-                chats.push({
-                    id: resolvedManual,
-                    name: `Channel (from ${inviteCode})`,
-                    type: 'channel',
-                });
+        if (/@newsletter$/i.test(normalizedId) && inviteCode) {
+            console.log(`Querying newsletter: ${inviteCode}`);
+            try {
+                const metadata = await sock.newsletterMetadata('invite', inviteCode);
+                if (metadata) {
+                    console.log('\n[CHANNEL FOUND]');
+                    console.log(`  Name:        ${metadata.name || 'Unknown'}`);
+                    console.log(`  JID:         ${metadata.id}`);
+                    console.log(`  Subscribers: ${metadata.subscriberCount || 'unknown'}`);
+                    console.log(`  Description: ${metadata.description || 'none'}`);
+                    console.log(`  URL:         https://whatsapp.com/channel/${inviteCode}`);
+                    console.log('');
+                    console.log('Set in .env:');
+                    console.log(`  WHATSAPP_TARGET_ID=${metadata.id}`);
+                }
+            } catch (err) {
+                console.log(`\n[ERROR] Could not find newsletter: ${err.message}`);
+                console.log('Make sure the channel URL/ID is correct.');
             }
+        } else {
+            console.log(`Target "${manualTarget}" appears to be a group or direct chat (${normalizedId}).`);
+            console.log('Group JIDs look like: 120363xxxxxxxxxx@g.us');
         }
-    }
-
-    console.log('\n=== Available WhatsApp Chats ===\n');
-
-    const channels = chats.filter(c => c.type === 'channel');
-    const groups = chats.filter(c => c.type === 'group');
-    const regularChats = chats.filter(c => c.type === 'chat');
-
-    if (channels.length > 0) {
-        console.log('--- WhatsApp Channels ---');
-        channels.forEach((c) => {
-            const url = getChannelUrl(c.id);
-            console.log(`[CHANNEL] ${c.name}`);
-            console.log(`  ID: ${c.id}`);
-            if (url) console.log(`  URL: ${url}`);
-            console.log('');
-        });
-    } else {
-        console.log('--- WhatsApp Channels ---');
-        console.log('No channels found.');
         console.log('');
     }
-    
-    if (groups.length > 0) {
-        console.log('--- Groups ---');
-        groups.forEach((c) => {
-            console.log(`[GROUP] ${c.name}`);
-            console.log(`  ID: ${c.id}\n`);
-        });
-    }
-    
-    if (regularChats.length > 0) {
-        console.log('--- Chats ---');
-        regularChats.forEach((c) => {
-            console.log(`[CHAT] ${c.name}`);
-            console.log(`  ID: ${c.id}\n`);
-        });
+
+    console.log('--- Groups (fetching active groups...) ---');
+    try {
+        const groups = await sock.groupFetchAllParticipating();
+        const groupEntries = Object.entries(groups);
+
+        if (groupEntries.length === 0) {
+            console.log('No groups found.');
+        } else {
+            for (const [jid, meta] of groupEntries) {
+                console.log(`[GROUP] ${meta.subject || 'Unknown'}`);
+                console.log(`  ID: ${jid}\n`);
+            }
+        }
+    } catch (err) {
+        console.log(`Could not fetch groups: ${err.message}`);
     }
 
-    console.log('\n=== Usage Tips ===');
-    console.log('For WhatsApp Channels, you can use:');
-    console.log('  - The full URL: https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
-    console.log('  - Or just the channel ID: 0029Vb7T8V460eBW2gKeNC1x');
-    console.log('  - The code automatically adds @newsletter suffix');
-    console.log('  - You can also pass a channel link to list-chats to force resolution:');
-    console.log('    npm run list-chats https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
+    console.log('');
+    console.log('=== Usage Tips ===');
+    console.log('For WhatsApp Channels (newsletters):');
+    console.log('  Run: npm run list-chats https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
+    console.log('  This will show the channel JID to use in WHATSAPP_TARGET_ID');
+    console.log('');
+    console.log('For Groups:');
+    console.log('  Copy the group ID from above (format: 120363xxxxxxxxxx@g.us)');
+    console.log('');
+    console.log('Note: With Baileys (WebSocket API), no Chrome/Puppeteer is needed!');
     console.log('');
 
-    // Check if WHATSAPP_TARGET_ID is set to a channel and provide specific guidance
-    const targetId = process.env.WHATSAPP_TARGET_ID;
-    if (targetId) {
-        const normalizedId = normalizeWhatsAppId(targetId);
-        if (normalizedId.includes('@newsletter')) {
-            const inviteCode = extractInviteCode(targetId) || normalizedId.replace('@newsletter', '');
-            let resolvedTargetId = await resolveChannelTargetId(client, targetId);
-            resolvedTargetId = await resolveChannelTargetIdFromPage(client, resolvedTargetId);
-            console.log('=== Your Configured Target Channel ===');
-            console.log(`Channel ID: ${inviteCode}`);
-            console.log(`URL: https://whatsapp.com/channel/${inviteCode}`);
-            if (resolvedTargetId !== normalizedId) {
-                console.log(`Resolved WA Internal ID: ${resolvedTargetId}`);
-            }
-            
-            const foundChannel = channels.find(c => c.id === resolvedTargetId || c.id === normalizedId);
-            if (foundChannel) {
-                console.log(`Status: ✓ Found in your channels`);
-            } else {
-                console.log(`Status: ✗ NOT found in your followed channels`);
-                console.log('');
-                console.log('IMPORTANT: You must FOLLOW this channel from your WhatsApp app!');
-                console.log('');
-                console.log('Steps to fix:');
-                console.log('1. Open WhatsApp on your phone');
-                console.log('2. Go to Updates tab → Channels');
-                console.log('3. Find your channel and tap "Follow"');
-                console.log('4. Or run: npm run follow-channel https://whatsapp.com/channel/' + inviteCode);
-                console.log('');
-                console.log('Even as a channel admin, you need to "Follow" your own channel');
-                console.log('for the bot to be able to post to it.');
-            }
-            console.log('');
-        }
-    }
-    
-    if (channels.length === 0 && !targetId) {
-        console.log('=== Troubleshooting Channels ===');
-        console.log('If you have channels but they don\'t appear:');
-        console.log('  1. Make sure you\'ve "Followed" the channel from your WhatsApp app');
-        console.log('  2. Run: npm run follow-channel <channel-url> to subscribe via the bot');
-        console.log('  3. Run: npm run list-chats <channel-url> to resolve the ID directly');
-        console.log('  4. Example: npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
-        console.log('');
-        console.log('Note: As a channel admin, you may need to follow your own channel first.');
-        console.log('');
-    }
-
-    await client.destroy();
+    sock.end(undefined);
     process.exit(0);
 }
 
 main().catch((err) => {
-    logger.error('Error listing chats:', err);
+    logger.error('Error:', err);
     process.exit(1);
 });

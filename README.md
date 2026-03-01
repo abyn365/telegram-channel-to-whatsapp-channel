@@ -1,6 +1,8 @@
 # Telegram → WhatsApp Channel Forwarder
 
-A userbot that watches one or more **Telegram channels** and automatically forwards every new message to a **WhatsApp channel or group**.
+A userbot that watches one or more **Telegram channels** and automatically forwards every new message to a **WhatsApp channel (newsletter) or group**.
+
+**Powered by [Baileys](https://github.com/WhiskeySockets/Baileys) — no Chrome or Puppeteer required.** Connects directly to WhatsApp Web via WebSocket, saving ~500 MB of RAM compared to browser-based approaches.
 
 Supports all major Telegram content types:
 
@@ -9,10 +11,10 @@ Supports all major Telegram content types:
 | Text messages | Text message |
 | Photos | Image + caption |
 | Videos | Video + caption |
-| Audio / Voice | Audio file + caption |
+| Audio / Voice | Audio file |
 | Documents / Files | File attachment + caption |
-| Animated GIFs | GIF/video + caption |
-| Stickers | Image/webp |
+| Animated GIFs | Video (gifPlayback) |
+| Stickers | WebP sticker |
 | Webpage previews | Text with link |
 | Polls | Formatted text |
 | Locations | Google Maps link |
@@ -24,36 +26,14 @@ Supports all major Telegram content types:
 
 - **Ubuntu VPS** (20.04 / 22.04 / 24.04 recommended)
 - **Node.js 18+** — install via [nvm](https://github.com/nvm-sh/nvm) or NodeSource
-- **PM2** — `npm install -g pm2`
-- **Google Chrome / Chromium** — required by WhatsApp Web
+- **PM2** (optional) — `npm install -g pm2`
 - **Telegram API credentials** — get from [my.telegram.org](https://my.telegram.org)
 
----
-
-## 1 · Install Chrome on Ubuntu
-
-```bash
-sudo mkdir -p /etc/apt/keyrings
-
-curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
-
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
-  | sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null
-
-sudo apt update
-sudo apt install -y google-chrome-stable
-```
-
-Or Chromium:
-
-```bash
-sudo apt update && sudo apt install -y chromium-browser
-```
+> ✅ No Chrome or Chromium installation needed — Baileys uses WebSockets directly.
 
 ---
 
-## 2 · Clone & Install
+## 1 · Clone & Install
 
 ```bash
 git clone https://github.com/abyn365/telegram-channel-to-whatsapp-channel.git
@@ -63,7 +43,7 @@ npm install
 
 ---
 
-## 3 · Configure
+## 2 · Configure
 
 ```bash
 cp .env.example .env
@@ -78,127 +58,104 @@ TELEGRAM_API_ID=12345678
 TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890
 TELEGRAM_PHONE=+1234567890
 
-# Comma-separated channels to watch (username or numeric ID)
+# Comma-separated Telegram channels to watch
 TELEGRAM_CHANNELS=@mychannel,@anotherchannel
 
-# WhatsApp target (channel or group ID — see Step 4)
-# For WhatsApp Channels:
-#   - Full URL: https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
-#   - Or just the channel ID: 0029Vb7T8V460eBW2gKeNC1x
-#   - The code automatically adds @newsletter suffix
-# For Groups: 120363xxxxxxxxxx@g.us
-WHATSAPP_TARGET_ID=
+# WhatsApp target (channel JID or group JID — see Step 3)
+WHATSAPP_TARGET_ID=120363282083849178@newsletter
 
 # Optional
 MESSAGE_PREFIX=
 MAX_FILE_SIZE_MB=50
+SEND_DELAY_MS=1500
 LOG_LEVEL=info
+```
+
+---
+
+## 3 · Find Your WhatsApp Channel or Group ID
+
+### For WhatsApp Channels (newsletters):
+
+Run with your channel's invite URL:
+
+```bash
+npm run list-chats https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
+```
+
+This will output:
+
+```
+[CHANNEL FOUND]
+  Name:        My Channel
+  JID:         120363282083849178@newsletter
+  Subscribers: 1234
+  URL:         https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
+
+Set in .env:
+  WHATSAPP_TARGET_ID=120363282083849178@newsletter
+```
+
+Copy the JID into your `.env`.
+
+### For Groups:
+
+```bash
+npm run list-chats
+```
+
+This lists all groups your account is in. Copy the group JID (e.g. `120363xxxxxxxxxx@g.us`).
+
+### Follow / subscribe to a channel:
+
+```bash
+npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
 ```
 
 ---
 
 ## 4 · First Run — Authenticate Both Accounts
 
-### 4a · Authenticate Telegram
-
-Run the app once in interactive mode:
-
 ```bash
 npm start
 ```
 
-It will ask for:
-1. Your **verification code** (sent via SMS / Telegram app)
+### Telegram
+You will be prompted for:
+1. Your **verification code** (sent via SMS or Telegram app)
 2. Your **2FA password** (if enabled)
 
-The session is saved to `sessions/telegram.session` — you won't need to log in again.
+Session is saved to `sessions/telegram.session`.
 
-### 4b · Authenticate WhatsApp
+### WhatsApp
+A **QR code** will appear in the terminal.  
+Open WhatsApp on your phone → **Linked Devices** → **Link a Device** → scan QR.
 
-During the same first run, a **QR code** will be printed in the terminal.  
-Open WhatsApp on your phone → **Linked Devices** → **Link a Device** → scan the QR.
-
-The session is saved to `sessions/whatsapp/` — persistent across restarts.
-
-### 4c · Find Your WhatsApp Channel / Group ID
-
-After WhatsApp is connected, **Ctrl+C** to stop, then run:
-
-```bash
-npm run list-chats
-```
-
-This prints all available chats with their IDs, organized by type:
-- **WhatsApp Channels** - shown with `[CHANNEL]` and the WhatsApp channel URL
-- **Groups** - shown with `[GROUP]`
-- **Chats** - shown with `[CHAT]`
-
-If your channel still doesn’t appear, you can force resolution with a link:
-
-```bash
-npm run list-chats https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
-```
-
-Copy the ID into `WHATSAPP_TARGET_ID` in `.env`. For WhatsApp channels, you can use:
-- The full URL: `https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x`
-- Or just the channel ID: `0029Vb7T8V460eBW2gKeNC1x`
-- The code will automatically convert it to the correct format
-
-**Note:** To forward to a WhatsApp Channel, your WhatsApp account must be an admin of that channel.
-
-### 4d · Follow a WhatsApp Channel
-
-If your WhatsApp channel doesn't appear in the list, you can subscribe to it using:
-
-```bash
-npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
-```
-
-Or with just the channel ID:
-
-```bash
-npm run follow-channel 0029Vb7T8V460eBW2gKeNC1x
-```
-
-Alternatively, follow the channel manually:
-1. Open WhatsApp on your phone
-2. Go to the **Updates** tab
-3. Find your channel and tap **Follow**
-4. Run `npm run list-chats` again to verify
+Session is saved to `sessions/baileys/` — persistent across restarts.
 
 ---
 
 ## 5 · Run in the Background with PM2
 
-Install PM2 globally if you haven't:
-
 ```bash
 npm install -g pm2
-```
-
-Start the forwarder:
-
-```bash
 npm run start:pm2
-# or directly:
-pm2 start ecosystem.config.js
 ```
 
-Useful PM2 commands:
+Useful commands:
 
 ```bash
 pm2 list                          # see all processes
 pm2 logs tg-wa-forwarder          # stream live logs
-pm2 restart tg-wa-forwarder       # restart the process
-pm2 stop tg-wa-forwarder          # stop the process
-pm2 delete tg-wa-forwarder        # remove from PM2
+pm2 restart tg-wa-forwarder       # restart
+pm2 stop tg-wa-forwarder          # stop
 ```
 
-### Auto-start on system reboot
+Auto-start on reboot:
 
 ```bash
 pm2 startup        # follow the printed command
-pm2 save           # save current process list
+pm2 save
 ```
 
 ---
@@ -208,15 +165,17 @@ pm2 save           # save current process list
 ```
 .
 ├── src/
-│   ├── index.js            # Entry point — wires everything together
+│   ├── index.js            # Entry point
 │   ├── telegramClient.js   # GramJS userbot, media download, event listener
-│   ├── whatsappClient.js   # whatsapp-web.js client, QR login, send helpers
-│   ├── forwarder.js        # Orchestrates download → format → send pipeline
+│   ├── whatsappClient.js   # Baileys WebSocket client, send helpers
+│   ├── forwarder.js        # Message queue + download → format → send pipeline
 │   ├── messageFormatter.js # Builds WhatsApp message text/caption
 │   ├── logger.js           # Winston logger (console + file)
-│   ├── listChats.js        # Utility script to list WhatsApp chats
-│   └── followChannel.js    # Utility script to subscribe to WhatsApp channels
-├── sessions/               # Persisted auth sessions (gitignored)
+│   ├── listChats.js        # Utility: look up WhatsApp channel/group IDs
+│   └── followChannel.js    # Utility: follow/subscribe to a WhatsApp channel
+├── sessions/
+│   ├── baileys/            # WhatsApp auth (Baileys multi-file state)
+│   └── telegram.session    # Telegram session string
 ├── logs/                   # Log files (gitignored)
 ├── temp/                   # Temporary media files (auto-cleaned)
 ├── ecosystem.config.js     # PM2 configuration
@@ -230,24 +189,35 @@ pm2 save           # save current process list
 
 | Problem | Solution |
 |---|---|
-| WhatsApp QR not showing | Run `npm start` in an interactive terminal first |
-| `CHROME_PATH` errors | Install Chrome/Chromium (see Step 1) |
-| Telegram flood/ban errors | Use your own API credentials, avoid mass testing |
-| Large files not forwarded | Increase `MAX_FILE_SIZE_MB` or WhatsApp's 100 MB limit applies |
-| Session expired (WhatsApp) | Delete `sessions/whatsapp/` and re-scan QR |
+| WhatsApp QR not showing | Run `npm start` in an interactive terminal |
+| Session expired (WhatsApp) | Delete `sessions/baileys/` and re-scan QR |
 | Session expired (Telegram) | Delete `sessions/telegram.session` and re-login |
-| `TargetCloseError: Protocol error` or `Session closed` | Usually caused by Chrome resource issues. The app now auto-detects Chrome/Chromium. Ensure you have enough RAM (at least 1GB free) and Chrome is installed properly. Try running again. |
-| Channel not showing in list-chats | Run `npm run follow-channel <channel-url>` to subscribe, or follow manually in WhatsApp app |
-| "No channels found" in list-chats | Make sure you've followed the channel from your WhatsApp app (Updates tab → Find channel → Follow) |
-| Cannot send to channel | Your WhatsApp account must be an admin of the channel to post messages |
+| Telegram flood/ban errors | Use your own API credentials, avoid mass testing |
+| Large files not forwarded | Increase `MAX_FILE_SIZE_MB` (WhatsApp limit: 100 MB) |
+| Channel not found | Run `npm run list-chats <channel-url>` to resolve the JID |
+| Messages too fast / rate limited | Increase `SEND_DELAY_MS` in `.env` (default: 1500) |
+| Cannot post to channel | Your WhatsApp account must be an admin of the newsletter |
 
 ---
 
-## 8 · Notes
+## 8 · Why Baileys instead of whatsapp-web.js?
 
-- **WhatsApp channels** require the account linked to be the channel admin.  
-- **WhatsApp groups** work with any member account.  
-- This project uses the unofficial WhatsApp Web protocol — use at your own risk.  
+| | whatsapp-web.js | **Baileys** |
+|---|---|---|
+| Requires Chrome/Puppeteer | ✅ Yes (~500 MB RAM) | ❌ No — WebSocket only |
+| Memory usage | ~600–900 MB | ~50–100 MB |
+| Connection speed | Slow (browser boot) | Fast (WebSocket) |
+| Auto-reconnect | Manual | Built-in with backoff |
+| Newsletter/channel support | Fragile (DOM scraping) | Native API support |
+| Media streaming | Base64 in memory | Efficient streams |
+
+---
+
+## 9 · Notes
+
+- **WhatsApp channels** require the linked account to be the channel admin/owner to post messages.
+- **WhatsApp groups** work with any member account.
+- This project uses the unofficial WhatsApp Web protocol — use at your own risk.
 - Telegram API requires a real user account (userbot), not a bot token.
 
 ---

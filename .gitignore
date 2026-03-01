@@ -6,6 +6,4 @@ logs/*
 !logs/.gitkeep
 temp/*
 !temp/.gitkeep
-.wwebjs_auth/
-.wwebjs_cache/
 *.session

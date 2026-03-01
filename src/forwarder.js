@@ -5,49 +5,68 @@ const { sendMessage } = require('./whatsappClient');
 const { buildPayload } = require('./messageFormatter');
 
 const TEMP_DIR = path.join(__dirname, '../temp');
-
 const TEXT_ONLY_TYPES = new Set(['text', 'webpage', 'poll', 'location', 'contact', 'unknown']);
 
-async function resolveChannelTitle(telegramClient, chatPeer) {
-    try {
-        const entity = await telegramClient.getEntity(chatPeer);
-        return entity.title || entity.username || String(entity.id);
-    } catch {
-        return '';
-    }
-}
+const SEND_DELAY_MS = parseInt(process.env.SEND_DELAY_MS, 10) || 1500;
 
-async function forwardMessage(telegramClient, whatsappClient, message, targetId, channelTitle) {
-    const mediaType = getMediaType(message);
-    logger.info(`Forwarding message id=${message.id} type=${mediaType} from "${channelTitle}"`);
+const messageQueue = [];
+let isProcessing = false;
 
-    let filePath = null;
+async function processQueue() {
+    if (isProcessing || messageQueue.length === 0) return;
+    isProcessing = true;
 
-    if (!TEXT_ONLY_TYPES.has(mediaType)) {
-        filePath = await downloadMedia(telegramClient, message, TEMP_DIR);
-    }
-
-    const senderInfo = extractSenderInfo(message, telegramClient);
-    
-    if (!senderInfo.name && message.fromId) {
-        const senderName = await getSenderName(telegramClient, message.fromId);
-        if (senderName) {
-            senderInfo.name = senderName;
+    while (messageQueue.length > 0) {
+        const task = messageQueue.shift();
+        try {
+            await task();
+        } catch (err) {
+            logger.error('Queue task failed:', err);
+        }
+        if (messageQueue.length > 0) {
+            await new Promise((res) => setTimeout(res, SEND_DELAY_MS));
         }
     }
 
-    const payload = buildPayload(message, filePath, channelTitle, senderInfo);
-
-    try {
-        await sendMessage(whatsappClient, targetId, payload);
-        logger.info(`Message id=${message.id} forwarded to WhatsApp successfully.`);
-    } catch (err) {
-        logger.error(`Failed to forward message id=${message.id}:`, err);
-        if (filePath) {
-            const fs = require('fs-extra');
-            await fs.remove(filePath).catch(() => {});
-        }
-    }
+    isProcessing = false;
 }
 
-module.exports = { forwardMessage, resolveChannelTitle };
+function enqueue(task) {
+    messageQueue.push(task);
+    processQueue();
+}
+
+async function forwardMessage(telegramClient, whatsappSock, message, targetId, channelTitle) {
+    enqueue(async () => {
+        const mediaType = getMediaType(message);
+        logger.info(`Forwarding message id=${message.id} type=${mediaType} from "${channelTitle}"`);
+
+        let filePath = null;
+
+        if (!TEXT_ONLY_TYPES.has(mediaType)) {
+            filePath = await downloadMedia(telegramClient, message, TEMP_DIR);
+        }
+
+        const senderInfo = extractSenderInfo(message, telegramClient);
+
+        if (!senderInfo.name && message.fromId) {
+            const senderName = await getSenderName(telegramClient, message.fromId);
+            if (senderName) senderInfo.name = senderName;
+        }
+
+        const payload = buildPayload(message, filePath, channelTitle, senderInfo);
+
+        try {
+            await sendMessage(whatsappSock, targetId, payload);
+            logger.info(`Message id=${message.id} forwarded to WhatsApp successfully.`);
+        } catch (err) {
+            logger.error(`Failed to forward message id=${message.id}:`, err);
+            if (filePath) {
+                const fs = require('fs-extra');
+                await fs.remove(filePath).catch(() => {});
+            }
+        }
+    });
+}
+
+module.exports = { forwardMessage };

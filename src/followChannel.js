@@ -1,102 +1,94 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, normalizeWhatsAppId, resolveChannelTargetId, resolveChannelTargetIdFromPage, extractInviteCode } = require('./whatsappClient');
+const {
+    createWhatsAppClientWithReconnect,
+    normalizeWhatsAppId,
+    extractInviteCode,
+} = require('./whatsappClient');
 
-async function followChannel(client, targetId) {
+async function followChannel(sock, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
-    
-    if (!normalizedId.includes('@newsletter')) {
-        throw new Error('This command is only for WhatsApp channels (newsletters). Use a channel URL or ID like: 0029Vb7T8V460eBW2gKeNC1x');
+
+    if (!/@newsletter$/i.test(normalizedId)) {
+        throw new Error('This command is only for WhatsApp channels (newsletters). Use a channel URL or invite code like: 0029Vb7T8V460eBW2gKeNC1x');
     }
-    
-    const inviteCode = extractInviteCode(targetId) || normalizedId.replace('@newsletter', '');
-    let channelId = await resolveChannelTargetId(client, targetId);
-    channelId = await resolveChannelTargetIdFromPage(client, channelId);
-    
-    logger.info(`Attempting to follow WhatsApp channel: ${inviteCode}`);
-    
-    // First, try to get channel info
+
+    const inviteCode = extractInviteCode(targetId);
+    if (!inviteCode) {
+        throw new Error(`Could not extract invite code from: ${targetId}`);
+    }
+
+    logger.info(`Looking up WhatsApp channel: ${inviteCode}`);
+
+    let metadata;
     try {
-        const channel = await client.getChannelByInviteCode(inviteCode);
-        if (channel) {
-            logger.info(`Found channel: ${channel.name || 'Unknown'}`);
-            if (channel.id?._serialized) {
-                logger.info(`Resolved channel ID: ${channel.id._serialized}`);
-            }
+        metadata = await sock.newsletterMetadata('invite', inviteCode);
+        if (metadata) {
+            logger.info(`Found channel: "${metadata.name || 'Unknown'}" (${metadata.id})`);
+            logger.info(`Subscribers: ${metadata.subscriberCount || 'unknown'}`);
         }
     } catch (err) {
-        logger.warn(`Could not get channel info: ${err.message}`);
+        logger.warn(`Could not fetch channel metadata: ${err.message}`);
     }
-    
-    // Try to subscribe/follow
+
+    const jid = metadata?.id
+        ? (metadata.id.includes('@newsletter') ? metadata.id : `${metadata.id}@newsletter`)
+        : normalizedId;
+
+    logger.info(`Attempting to follow channel JID: ${jid}`);
+
     try {
-        const success = await client.subscribeToChannel(channelId);
-        
-        if (success) {
-            return { success: true, message: 'Successfully followed the channel!' };
-        } else {
-            return { success: false, message: 'Failed to follow the channel. You may need to follow it manually in WhatsApp.' };
-        }
+        await sock.newsletterFollow(jid);
+        logger.info('Successfully followed the channel!');
+        return { success: true, jid, name: metadata?.name };
     } catch (err) {
-        const errorMessage = err.message || '';
-        
-        if (errorMessage.includes('already') || errorMessage.includes('subscribed') || errorMessage.includes('owner')) {
-            return { success: true, message: 'Already following this channel (or you are the owner)!' };
+        const msg = err.message || '';
+        if (msg.includes('already') || msg.includes('subscribed')) {
+            logger.info('Already following this channel.');
+            return { success: true, jid, name: metadata?.name, alreadyFollowed: true };
         }
-        
-        logger.debug(`subscribeToChannel error: ${errorMessage}`);
-        
-        return { success: false, error: errorMessage, resolvedChannelId: channelId };
+        logger.error(`Failed to follow channel: ${msg}`);
+        return { success: false, error: msg, jid };
     }
 }
 
 async function main() {
     const targetId = process.argv[2] || process.env.WHATSAPP_TARGET_ID;
-    
+
     if (!targetId) {
-        console.log('Usage: npm run follow-channel <channel-url-or-id>');
-        console.log('   or: Set WHATSAPP_TARGET_ID in .env and run npm run follow-channel');
+        console.log('Usage: npm run follow-channel <channel-url-or-invite-code>');
         console.log('');
         console.log('Examples:');
         console.log('  npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
         console.log('  npm run follow-channel 0029Vb7T8V460eBW2gKeNC1x');
         process.exit(1);
     }
-    
+
     logger.info('Connecting to WhatsApp...');
-    const client = await createWhatsAppClient();
-    
+    const sock = await createWhatsAppClientWithReconnect();
+
     try {
-        const result = await followChannel(client, targetId);
-        
+        const result = await followChannel(sock, targetId);
+
         if (result.success) {
-            logger.info(result.message || 'Success!');
-            logger.info('');
-            logger.info('The channel should now be available for posting.');
-            logger.info('Try running the forwarder again.');
-        } else {
-            logger.error(result.message || result.error || 'Failed to follow channel');
-            if (result.resolvedChannelId) {
-                logger.info(`Resolved channel target used: ${result.resolvedChannelId}`);
+            logger.info(result.alreadyFollowed ? 'Already following this channel.' : 'Channel followed successfully!');
+            if (result.jid) {
+                logger.info('');
+                logger.info('=== Add this to your .env ===');
+                logger.info(`WHATSAPP_TARGET_ID=${result.jid}`);
+                logger.info('');
             }
+        } else {
+            logger.error(`Could not follow channel: ${result.error}`);
             logger.info('');
-            logger.info('=== Manual Follow Instructions ===');
-            logger.info('If the automatic follow failed, you can manually follow:');
-            logger.info('');
-            logger.info('1. Open WhatsApp on your phone');
-            logger.info('2. Go to the Updates tab');
-            logger.info('3. Tap "Find channels" or search for your channel');
-            logger.info('4. Find your channel and tap "Follow"');
-            logger.info('5. Once followed, restart the forwarder');
-            logger.info('');
-            logger.info('IMPORTANT: Even as a channel admin/owner, you must "Follow"');
-            logger.info('your own channel for the WhatsApp Web session to see it.');
+            logger.info('You can still set WHATSAPP_TARGET_ID manually using the channel JID.');
+            logger.info(`The resolved JID was: ${result.jid}`);
         }
     } catch (err) {
         logger.error('Error:', err.message);
     }
-    
-    await client.destroy();
+
+    sock.end(undefined);
     process.exit(0);
 }
 
