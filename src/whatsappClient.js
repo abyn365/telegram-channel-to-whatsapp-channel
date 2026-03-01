@@ -306,14 +306,62 @@ async function sendMessage(sock, targetId, payload) {
     const { text, filePath, mediaType } = payload;
 
     if (filePath && (await fs.pathExists(filePath))) {
+        const hasCaption = text && text.trim();
+        let sendFailed = false;
+
         try {
             if (mediaType === 'sticker') {
                 await sendStickerFile(sock, targetId, filePath);
             } else {
-                await sendMediaFile(sock, targetId, filePath, text || '');
+                // If there's a caption, try sending image with caption first
+                if (hasCaption) {
+                    try {
+                        await sendMediaFile(sock, targetId, filePath, text);
+                    } catch (err) {
+                        // If that fails, try sending image alone then caption as text
+                        logger.warn(`Failed to send image with caption: ${err.message}. Sending as separate messages...`);
+                        let imageSent = false;
+                        try {
+                            await sendMediaFile(sock, targetId, filePath, '');
+                            imageSent = true;
+                        } catch (err2) {
+                            logger.error(`Failed to send image: ${err2.message}`);
+                        }
+                        // Always try to send caption as text (it might have useful info even if image failed)
+                        if (text && text.trim()) {
+                            try {
+                                await sendText(sock, targetId, text);
+                            } catch (err3) {
+                                logger.error(`Failed to send caption as text: ${err3.message}`);
+                                if (!imageSent) {
+                                    sendFailed = true;
+                                }
+                            }
+                        }
+                        if (!imageSent) {
+                            sendFailed = true;
+                        }
+                    }
+                } else {
+                    // No caption, try to send the media
+                    try {
+                        await sendMediaFile(sock, targetId, filePath, '');
+                    } catch (err) {
+                        logger.error(`Failed to send image: ${err.message}`);
+                        sendFailed = true;
+                    }
+                }
             }
+        } catch (err) {
+            logger.error(`Failed to send media: ${err.message}`);
+            sendFailed = true;
         } finally {
             await fs.remove(filePath).catch(() => {});
+        }
+
+        // If we failed to send anything, throw to notify caller
+        if (sendFailed) {
+            throw new Error('Failed to send media after all attempts');
         }
         return;
     }
