@@ -33,9 +33,16 @@ Supports all major Telegram content types:
 ## 1 · Install Chrome on Ubuntu
 
 ```bash
-wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-sudo apt update && sudo apt install -y google-chrome-stable
+sudo mkdir -p /etc/apt/keyrings
+
+curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+
+echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
+  | sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null
+
+sudo apt update
+sudo apt install -y google-chrome-stable
 ```
 
 Or Chromium:
