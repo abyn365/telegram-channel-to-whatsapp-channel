@@ -14,6 +14,17 @@ async function followChannel(client, targetId) {
     
     logger.info(`Attempting to follow WhatsApp channel: ${inviteCode}`);
     
+    // First, try to get channel info
+    try {
+        const channel = await client.getChannelByInviteCode(inviteCode);
+        if (channel) {
+            logger.info(`Found channel: ${channel.name || 'Unknown'}`);
+        }
+    } catch (err) {
+        logger.warn(`Could not get channel info: ${err.message}`);
+    }
+    
+    // Try to subscribe/follow
     try {
         const success = await client.subscribeToChannel(channelId);
         
@@ -25,8 +36,8 @@ async function followChannel(client, targetId) {
     } catch (err) {
         const errorMessage = err.message || '';
         
-        if (errorMessage.includes('already') || errorMessage.includes('subscribed')) {
-            return { success: true, message: 'Already following this channel!' };
+        if (errorMessage.includes('already') || errorMessage.includes('subscribed') || errorMessage.includes('owner')) {
+            return { success: true, message: 'Already following this channel (or you are the owner)!' };
         }
         
         logger.debug(`subscribeToChannel error: ${errorMessage}`);
@@ -56,14 +67,23 @@ async function main() {
         
         if (result.success) {
             logger.info(result.message || 'Success!');
+            logger.info('');
+            logger.info('The channel should now be available for posting.');
+            logger.info('Try running the forwarder again.');
         } else {
             logger.error(result.message || result.error || 'Failed to follow channel');
             logger.info('');
-            logger.info('To manually follow a WhatsApp channel:');
+            logger.info('=== Manual Follow Instructions ===');
+            logger.info('If the automatic follow failed, you can manually follow:');
+            logger.info('');
             logger.info('1. Open WhatsApp on your phone');
             logger.info('2. Go to the Updates tab');
-            logger.info('3. Find your channel and tap "Follow"');
-            logger.info('4. Once followed, restart the forwarder');
+            logger.info('3. Tap "Find channels" or search for your channel');
+            logger.info('4. Find your channel and tap "Follow"');
+            logger.info('5. Once followed, restart the forwarder');
+            logger.info('');
+            logger.info('IMPORTANT: Even as a channel admin/owner, you must "Follow"');
+            logger.info('your own channel for the WhatsApp Web session to see it.');
         }
     } catch (err) {
         logger.error('Error:', err.message);

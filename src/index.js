@@ -6,8 +6,71 @@ const {
     resolveChannelEntities,
     startListener,
 } = require('./telegramClient');
-const { createWhatsAppClient } = require('./whatsappClient');
+const { createWhatsAppClient, normalizeWhatsAppId } = require('./whatsappClient');
 const { forwardMessage } = require('./forwarder');
+
+async function checkWhatsAppTarget(client, targetId) {
+    const normalizedId = normalizeWhatsAppId(targetId);
+    
+    if (!normalizedId.includes('@newsletter')) {
+        // For non-channel targets, just verify it exists
+        try {
+            const chat = await client.getChatById(normalizedId);
+            if (chat) {
+                logger.info(`WhatsApp target verified: ${chat.name || normalizedId}`);
+                return true;
+            }
+        } catch (err) {
+            logger.warn(`Could not verify WhatsApp target: ${err.message}`);
+        }
+        return false;
+    }
+    
+    // For channels, check if it's in the followed channels
+    const inviteCode = normalizedId.replace('@newsletter', '');
+    
+    try {
+        const channels = await client.getChannels();
+        const found = channels && channels.find(c => c.id._serialized === normalizedId);
+        
+        if (found) {
+            logger.info(`WhatsApp channel verified: "${found.name}" (${inviteCode})`);
+            return true;
+        }
+        
+        // Channel not found in followed list
+        logger.warn('');
+        logger.warn('=== WHATSAPP CHANNEL NOT FOUND ===');
+        logger.warn(`Channel ID: ${inviteCode}`);
+        logger.warn(`URL: https://whatsapp.com/channel/${inviteCode}`);
+        logger.warn('');
+        logger.warn('The channel is NOT in your followed channels list.');
+        logger.warn('Even as the channel admin/owner, you must "Follow" the channel');
+        logger.warn('for the WhatsApp Web session to see and post to it.');
+        logger.warn('');
+        logger.warn('TO FIX:');
+        logger.warn('  1. Run: npm run follow-channel https://whatsapp.com/channel/' + inviteCode);
+        logger.warn('  2. Or open WhatsApp on your phone → Updates → Channels → Follow the channel');
+        logger.warn('');
+        
+        // Try to subscribe automatically
+        try {
+            logger.info('Attempting to automatically follow the channel...');
+            const success = await client.subscribeToChannel(normalizedId);
+            if (success) {
+                logger.info('Successfully followed the channel!');
+                return true;
+            }
+        } catch (subErr) {
+            logger.warn(`Auto-follow failed: ${subErr.message}`);
+        }
+        
+        return false;
+    } catch (err) {
+        logger.warn(`Could not check channel status: ${err.message}`);
+        return false;
+    }
+}
 
 async function main() {
     logger.info('Starting Telegram → WhatsApp forwarder...');
@@ -25,6 +88,9 @@ async function main() {
 
     logger.info('Connecting to WhatsApp...');
     const whatsappClient = await createWhatsAppClient();
+
+    // Check WhatsApp target availability
+    await checkWhatsAppTarget(whatsappClient, targetId);
 
     const { channelEntities, channelTitles } = await resolveChannelEntities(telegramClient, channels);
 

@@ -1,6 +1,6 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, listChats } = require('./whatsappClient');
+const { createWhatsAppClient, listChats, normalizeWhatsAppId } = require('./whatsappClient');
 
 function getChannelUrl(id) {
     if (id.includes('@newsletter')) {
@@ -65,7 +65,38 @@ async function main() {
     console.log('  - The code automatically adds @newsletter suffix');
     console.log('');
     
-    if (channels.length === 0) {
+    // Check if WHATSAPP_TARGET_ID is set to a channel and provide specific guidance
+    const targetId = process.env.WHATSAPP_TARGET_ID;
+    if (targetId) {
+        const normalizedId = normalizeWhatsAppId(targetId);
+        if (normalizedId.includes('@newsletter')) {
+            const inviteCode = normalizedId.replace('@newsletter', '');
+            console.log('=== Your Configured Target Channel ===');
+            console.log(`Channel ID: ${inviteCode}`);
+            console.log(`URL: https://whatsapp.com/channel/${inviteCode}`);
+            
+            const foundChannel = channels.find(c => c.id === normalizedId);
+            if (foundChannel) {
+                console.log(`Status: ✓ Found in your channels`);
+            } else {
+                console.log(`Status: ✗ NOT found in your followed channels`);
+                console.log('');
+                console.log('IMPORTANT: You must FOLLOW this channel from your WhatsApp app!');
+                console.log('');
+                console.log('Steps to fix:');
+                console.log('1. Open WhatsApp on your phone');
+                console.log('2. Go to Updates tab → Channels');
+                console.log('3. Find your channel and tap "Follow"');
+                console.log('4. Or run: npm run follow-channel https://whatsapp.com/channel/' + inviteCode);
+                console.log('');
+                console.log('Even as a channel admin, you need to "Follow" your own channel');
+                console.log('for the bot to be able to post to it.');
+            }
+            console.log('');
+        }
+    }
+    
+    if (channels.length === 0 && !targetId) {
         console.log('=== Troubleshooting Channels ===');
         console.log('If you have channels but they don\'t appear:');
         console.log('  1. Make sure you\'ve "Followed" the channel from your WhatsApp app');
