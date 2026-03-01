@@ -160,6 +160,24 @@ Alternatively, follow the channel manually:
 3. Find your channel and tap **Follow**
 4. Run `npm run list-chats` again to verify
 
+
+### Alternative backend: WAHA (recommended when channels fail in webjs)
+
+If WhatsApp Web JS cannot resolve/post to your channel (errors like `t`), use WAHA backend:
+
+```env
+WHATSAPP_PROVIDER=waha
+WAHA_BASE_URL=http://127.0.0.1:3000/api
+WAHA_SESSION=default
+```
+
+Notes:
+- `npm run list-chats` will query WAHA chats and show IDs from WAHA session.
+- Set `WHATSAPP_TARGET_ID` to an exact WAHA `chatId` (usually ends with `@newsletter` for channels).
+- `npm run follow-channel` is only for `webjs` provider. For WAHA, follow channel manually in phone app.
+
+---
+
 ---
 
 ## 5 · Run in the Background with PM2

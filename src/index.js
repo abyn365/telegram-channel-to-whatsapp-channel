@@ -11,6 +11,18 @@ const { forwardMessage } = require('./forwarder');
 
 async function checkWhatsAppTarget(client, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
+
+    if (client.__provider === 'waha') {
+        try {
+            const chat = await client.getChatById(normalizedId);
+            logger.info(`WAHA target verified: ${chat.name || normalizedId}`);
+            return true;
+        } catch (err) {
+            logger.warn(`WAHA could not verify target ${normalizedId}: ${err.message}`);
+            logger.warn('Tip: run `npm run list-chats` and set WHATSAPP_TARGET_ID to an exact chatId returned by WAHA.');
+            return false;
+        }
+    }
     
     if (!normalizedId.includes('@newsletter')) {
         // For non-channel targets, just verify it exists

@@ -5,6 +5,7 @@ const mime = require('mime-types');
 const path = require('path');
 const logger = require('./logger');
 const { execSync } = require('child_process');
+const { createWahaClient } = require('./wahaClient');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -92,6 +93,12 @@ function findChromeExecutable() {
 }
 
 async function createWhatsAppClient() {
+    const provider = (process.env.WHATSAPP_PROVIDER || 'webjs').toLowerCase();
+
+    if (provider === 'waha') {
+        return createWahaClient();
+    }
+
     const executablePath = findChromeExecutable();
 
     const sessionPath = path.join(__dirname, '../sessions/whatsapp');
@@ -218,6 +225,15 @@ async function createWhatsAppClient() {
 }
 
 async function listChats(client, retries = 3) {
+    if (client.__provider === 'waha') {
+        const chats = await client.getChats();
+        return chats.map((c) => ({
+            id: c.id._serialized,
+            name: c.name,
+            type: c.isGroup ? 'group' : (String(c.id._serialized).includes('@newsletter') ? 'channel' : 'chat'),
+        }));
+    }
+
     await waitForPageStable(client);
     
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -440,6 +456,12 @@ async function resolveChannelTargetIdFromPage(client, targetId) {
 async function ensureTargetAvailable(client, targetId) {
     if (!targetId || resolvedTargets.has(targetId)) return;
 
+    if (client.__provider === 'waha') {
+        await client.getChatById(targetId);
+        resolvedTargets.add(targetId);
+        return;
+    }
+
     let lastError;
 
     // For regular chats and groups, try getChatById
@@ -591,6 +613,12 @@ async function preloadChannel(client, channelId) {
 }
 
 async function sendWithRetry(client, targetId, content, options) {
+    if (client.__provider === 'waha') {
+        const normalizedId = normalizeWhatsAppId(targetId);
+        await ensureTargetAvailable(client, normalizedId);
+        return client.sendMessage(normalizedId, content, options);
+    }
+
     let normalizedId = await resolveChannelTargetId(client, targetId);
 
     if (normalizedId.includes('@newsletter')) {
@@ -653,6 +681,12 @@ async function sendText(client, targetId, text) {
 }
 
 async function sendMediaFile(client, targetId, filePath, caption) {
+    if (client.__provider === 'waha') {
+        const normalizedId = normalizeWhatsAppId(targetId);
+        await ensureTargetAvailable(client, normalizedId);
+        return client.sendMedia(normalizedId, filePath, caption);
+    }
+
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
     const data = await fs.readFile(filePath);
     const base64 = data.toString('base64');
