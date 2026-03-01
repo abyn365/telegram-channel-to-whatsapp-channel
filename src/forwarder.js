@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs-extra';
 import logger from './logger.js';
 import { downloadMedia, getMediaType, extractSenderInfo, getSenderName, buildTelegramMessageLink } from './telegramClient.js';
-import { sendMessage, isConnectionHealthy } from './whatsappClient.js';
+import { sendMessage, isConnectionHealthy, getConnectionState } from './whatsappClient.js';
 import { buildPayload } from './messageFormatter.js';
 import { initForwardedStore, buildForwardKey, hasForwarded, markForwarded } from './forwardedStore.js';
 import { translateToIndonesian, appendTranslation } from './translator.js';
@@ -18,6 +18,8 @@ const SEND_DELAY_MS = parseInt(process.env.SEND_DELAY_MS, 10) || 1500;
 const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE, 10) || 100;
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES, 10) || 3;
 const RETRY_DELAY_MS = parseInt(process.env.RETRY_DELAY_MS, 10) || 5000;
+const HEALTH_CHECK_RETRIES = parseInt(process.env.HEALTH_CHECK_RETRIES, 10) || 3;
+const HEALTH_CHECK_RETRY_DELAY_MS = parseInt(process.env.HEALTH_CHECK_RETRY_DELAY_MS, 10) || 3000;
 
 const sentSourceKeys = new Set();
 
@@ -70,11 +72,31 @@ async function processQueue(whatsappSock) {
     isProcessing = true;
 
     while (messageQueue.length > 0) {
-        // Check WhatsApp connection health
-        if (!await isConnectionHealthy(whatsappSock)) {
-            logger.warn('WhatsApp connection appears unhealthy, pausing queue processing...');
-            // Wait and retry
-            await new Promise((res) => setTimeout(res, 5000));
+        // Check WhatsApp connection health with retries
+        let healthCheckPassed = false;
+        let healthCheckAttempts = 0;
+        
+        while (!healthCheckPassed && healthCheckAttempts < HEALTH_CHECK_RETRIES) {
+            healthCheckAttempts++;
+            
+            if (await isConnectionHealthy(whatsappSock)) {
+                healthCheckPassed = true;
+                break;
+            }
+            
+            if (healthCheckAttempts === 1) {
+                logger.debug(`WhatsApp connection health check failed (internal state: ${getConnectionState()}), retrying...`);
+            }
+            
+            if (healthCheckAttempts < HEALTH_CHECK_RETRIES) {
+                await new Promise((res) => setTimeout(res, HEALTH_CHECK_RETRY_DELAY_MS));
+            }
+        }
+        
+        if (!healthCheckPassed) {
+            logger.warn('WhatsApp connection appears unhealthy after multiple checks, pausing queue processing...');
+            // Wait longer and retry once more
+            await new Promise((res) => setTimeout(res, 10000));
             if (!await isConnectionHealthy(whatsappSock)) {
                 logger.error('WhatsApp connection still unhealthy, stopping queue processing');
                 break;

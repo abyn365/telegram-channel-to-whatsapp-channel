@@ -596,16 +596,40 @@ async function checkNewsletterAccess(sock, targetId) {
     return false;
 }
 
+// Get connection state for external modules
+function getConnectionState() {
+    return _isConnected;
+}
+
 // Health check function
 async function isConnectionHealthy(sock) {
     if (!sock) return false;
+    
+    // First check internal connection state
+    if (_isConnected) return true;
+    
+    // Fallback: check WebSocket readyState if available
     try {
-        const state = sock.ws?.readyState;
-        // 1 = OPEN
-        return state === 1;
+        const ws = sock.ws || sock._ws;
+        if (ws && typeof ws.readyState === 'number') {
+            // WebSocket.OPEN = 1
+            return ws.readyState === 1;
+        }
     } catch {
-        return false;
+        // Ignore errors
     }
+    
+    // Last resort: check if socket has active connection via presence
+    try {
+        // If we can access the socket's user ID, connection is likely active
+        if (sock.user && sock.user.id) {
+            return true;
+        }
+    } catch {
+        // Ignore errors
+    }
+    
+    return false;
 }
 
 export {
@@ -620,4 +644,5 @@ export {
     resolveNewsletterJid,
     checkNewsletterAccess,
     isConnectionHealthy,
+    getConnectionState,
 };
