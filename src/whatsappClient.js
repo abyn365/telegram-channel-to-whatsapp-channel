@@ -5,6 +5,8 @@ const mime = require('mime-types');
 const path = require('path');
 const logger = require('./logger');
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function createWhatsAppClient() {
     const client = new Client({
         authStrategy: new LocalAuth({
@@ -12,6 +14,7 @@ async function createWhatsAppClient() {
         }),
         puppeteer: {
             headless: true,
+            executablePath: '/usr/bin/google-chrome-stable',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -21,6 +24,10 @@ async function createWhatsAppClient() {
                 '--no-zygote',
                 '--single-process',
                 '--disable-gpu',
+                '--disable-extensions',
+                '--disable-default-apps',
+                '--disable-translate',
+                '--disable-sync',
             ],
         },
     });
@@ -35,9 +42,10 @@ async function createWhatsAppClient() {
             qrcode.generate(qr, { small: true });
         });
 
-        client.on('ready', () => {
+        client.on('ready', async () => {
             clearTimeout(timeout);
             logger.info('WhatsApp userbot ready.');
+            await sleep(3000);
             resolve();
         });
 
@@ -56,13 +64,25 @@ async function createWhatsAppClient() {
     return client;
 }
 
-async function listChats(client) {
-    const chats = await client.getChats();
-    return chats.map((c) => ({
-        id: c.id._serialized,
-        name: c.name,
-        type: c.isGroup ? 'group' : c.isChannel ? 'channel' : 'chat',
-    }));
+async function listChats(client, retries = 3) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            await sleep(2000);
+            const chats = await client.getChats();
+            return chats.map((c) => ({
+                id: c.id._serialized,
+                name: c.name,
+                type: c.isGroup ? 'group' : c.isChannel ? 'channel' : 'chat',
+            }));
+        } catch (err) {
+            if (err.message.includes('Execution context was destroyed') && attempt < retries) {
+                logger.warn(`listChats attempt ${attempt} failed due to navigation, retrying...`);
+                await sleep(2000);
+                continue;
+            }
+            throw err;
+        }
+    }
 }
 
 async function sendText(client, targetId, text) {
