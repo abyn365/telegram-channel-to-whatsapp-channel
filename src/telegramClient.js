@@ -74,6 +74,46 @@ function resolveChannelTargets(raw) {
         .filter(Boolean);
 }
 
+async function resolveChannelEntities(client, channels) {
+    const channelEntities = [];
+    const channelTitles = {};
+
+    for (const raw of channels) {
+        if (!raw) continue;
+        try {
+            const entity = await client.getEntity(raw);
+            if (!entity) {
+                logger.warn(`Could not resolve Telegram channel: ${raw}`);
+                continue;
+            }
+
+            channelEntities.push(entity);
+
+            const title = entity.title || entity.username || String(entity.id);
+            channelTitles[raw] = title;
+
+            if (entity.username) {
+                channelTitles[entity.username] = title;
+                channelTitles[`@${entity.username}`] = title;
+            }
+
+            if (entity.id) {
+                const idValue = String(entity.id);
+                channelTitles[idValue] = title;
+                channelTitles[`-100${idValue}`] = title;
+            }
+        } catch (err) {
+            logger.warn(`Failed to resolve Telegram channel "${raw}": ${err.message || err}`);
+        }
+    }
+
+    if (channelEntities.length === 0) {
+        throw new Error('No Telegram channels could be resolved. Check TELEGRAM_CHANNELS in .env.');
+    }
+
+    return { channelEntities, channelTitles };
+}
+
 async function downloadMedia(client, message, tempDir) {
     const maxBytes = (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 50) * 1024 * 1024;
     let media = message.media;
@@ -227,12 +267,21 @@ function startListener(client, channels, onMessage) {
         }
     }, new NewMessage({ chats: channels }));
 
-    logger.info(`Listening on Telegram channels: ${channels.join(', ')}`);
+    const channelLabels = channels.map((channel) => {
+        if (typeof channel === 'string') return channel;
+        if (channel?.title) return channel.title;
+        if (channel?.username) return `@${channel.username}`;
+        if (channel?.id) return String(channel.id);
+        return 'unknown';
+    });
+
+    logger.info(`Listening on Telegram channels: ${channelLabels.join(', ')}`);
 }
 
 module.exports = {
     createTelegramClient,
     resolveChannelTargets,
+    resolveChannelEntities,
     downloadMedia,
     extractText,
     extractWebPageUrl,
