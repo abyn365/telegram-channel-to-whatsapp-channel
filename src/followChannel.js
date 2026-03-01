@@ -20,15 +20,28 @@ async function followChannel(sock, targetId) {
 
     logger.info(`Looking up WhatsApp channel: ${inviteCode}`);
 
-    let metadata;
-    try {
-        metadata = await sock.newsletterMetadata('invite', inviteCode);
-        if (metadata) {
-            logger.info(`Found channel: "${metadata.name || 'Unknown'}" (${metadata.id})`);
-            logger.info(`Subscribers: ${metadata.subscriberCount || 'unknown'}`);
+    let metadata = null;
+    
+    // Try to fetch metadata if the function is available
+    if (typeof sock.newsletterMetadata === 'function') {
+        try {
+            metadata = await sock.newsletterMetadata('invite', inviteCode);
+            if (metadata) {
+                logger.info(`Found channel: "${metadata.name || 'Unknown'}" (${metadata.id})`);
+                logger.info(`Subscribers: ${metadata.subscriberCount || 'unknown'}`);
+            }
+        } catch (err) {
+            // Handle GraphQL errors gracefully - these are common with newer Baileys versions
+            if (err.message?.includes('GraphQL')) {
+                logger.warn(`Could not fetch channel metadata: GraphQL API error`);
+                logger.warn(`  This is a known issue with some Baileys versions.`);
+                logger.warn(`  Will attempt to follow using the invite code directly.`);
+            } else {
+                logger.warn(`Could not fetch channel metadata: ${err.message}`);
+            }
         }
-    } catch (err) {
-        logger.warn(`Could not fetch channel metadata: ${err.message}`);
+    } else {
+        logger.info(`newsletterMetadata not available, will attempt to follow using invite code.`);
     }
 
     const jid = metadata?.id
@@ -36,6 +49,14 @@ async function followChannel(sock, targetId) {
         : normalizedId;
 
     logger.info(`Attempting to follow channel JID: ${jid}`);
+
+    // Check if newsletterFollow is available
+    if (typeof sock.newsletterFollow !== 'function') {
+        logger.warn(`newsletterFollow function is not available in this Baileys version.`);
+        logger.info(`The channel JID has been resolved to: ${jid}`);
+        logger.info(`You may need to manually follow the channel via WhatsApp app.`);
+        return { success: true, jid, name: metadata?.name, manualFollowRequired: true };
+    }
 
     try {
         await sock.newsletterFollow(jid);
@@ -71,7 +92,14 @@ async function main() {
         const result = await followChannel(sock, targetId);
 
         if (result.success) {
-            logger.info(result.alreadyFollowed ? 'Already following this channel.' : 'Channel followed successfully!');
+            if (result.manualFollowRequired) {
+                logger.info('Channel JID resolved but automatic following is not available.');
+                logger.info('Please follow the channel manually via WhatsApp app if needed.');
+            } else if (result.alreadyFollowed) {
+                logger.info('Already following this channel.');
+            } else {
+                logger.info('Channel followed successfully!');
+            }
             if (result.jid) {
                 logger.info('');
                 logger.info('=== Add this to your .env ===');
