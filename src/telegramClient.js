@@ -271,22 +271,41 @@ async function getSenderName(client, fromId) {
 }
 
 function startListener(client, channelFilters, onMessage, channelLabels = channelFilters) {
-    // Extract entity IDs for filtering - supports both entity objects and strings
-    const chatIds = channelFilters.map((channel) => {
-        if (typeof channel === 'string') return channel;
-        if (channel?.id) return channel.id;
-        return channel;
-    }).filter(Boolean);
+    const allowedChatIds = new Set(
+        (channelFilters || [])
+            .map((channel) => {
+                if (typeof channel === 'string') return channel.replace(/^@/, '');
+                if (channel?.username) return String(channel.username).replace(/^@/, '');
+                if (channel?.id) return String(channel.id);
+                return String(channel || '');
+            })
+            .filter(Boolean)
+    );
 
     client.addEventHandler(async (event) => {
         try {
             const msg = event.message;
             if (!msg) return;
+
+            const peerId = String(msg.peerId?.channelId || msg.peerId?.chatId || msg.peerId?.userId || '');
+            const peerIdWithPrefix = peerId ? `-100${peerId}` : '';
+            const peerUsername = String(msg.chat?.username || msg.chat?.title || '').replace(/^@/, '');
+
+            const isAllowed =
+                !allowedChatIds.size ||
+                allowedChatIds.has(peerId) ||
+                allowedChatIds.has(peerIdWithPrefix) ||
+                allowedChatIds.has(peerUsername);
+
+            if (!isAllowed) {
+                return;
+            }
+
             await onMessage(msg);
         } catch (err) {
             logger.error('Error handling Telegram message event:', err);
         }
-    }, new NewMessage({ chats: chatIds }));
+    }, new NewMessage({}));
 
     const labels = (channelLabels || []).map((channel) => {
         if (typeof channel === 'string') return channel;

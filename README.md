@@ -69,6 +69,8 @@ MESSAGE_PREFIX=
 MAX_FILE_SIZE_MB=50
 SEND_DELAY_MS=1500
 LOG_LEVEL=info
+# For WhatsApp channels/newsletters: "document" (default) or "native"
+NEWSLETTER_MEDIA_MODE=document
 ```
 
 ---

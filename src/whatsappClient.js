@@ -242,42 +242,60 @@ async function sendText(sock, targetId, text) {
     await sock.sendMessage(jid, { text });
 }
 
-async function sendMediaFile(sock, targetId, filePath, caption) {
-    const jid = await resolveNewsletterJid(sock, targetId);
-    const mimeType = mime.lookup(filePath) || 'application/octet-stream';
-    const fileBuffer = await fs.readFile(filePath);
+const NEWSLETTER_MEDIA_MODE = (process.env.NEWSLETTER_MEDIA_MODE || 'document').trim().toLowerCase();
+
+function buildMediaMessageContent(filePath, mimeType, mediaSource, caption = '', forceDocument = false) {
     const filename = path.basename(filePath);
 
-    let messageContent;
-
-    if (mimeType.startsWith('image/') && mimeType !== 'image/gif') {
-        messageContent = {
-            image: fileBuffer,
-            caption: caption || '',
+    if (!forceDocument && mimeType.startsWith('image/') && mimeType !== 'image/gif') {
+        return {
+            image: mediaSource,
+            caption,
             mimetype: mimeType,
         };
-    } else if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
-        messageContent = {
-            video: fileBuffer,
-            caption: caption || '',
+    }
+
+    if (!forceDocument && (mimeType.startsWith('video/') || mimeType === 'image/gif')) {
+        return {
+            video: mediaSource,
+            caption,
             mimetype: mimeType.startsWith('image/') ? 'video/mp4' : mimeType,
             gifPlayback: mimeType === 'image/gif',
         };
-    } else if (mimeType.startsWith('audio/')) {
+    }
+
+    if (!forceDocument && mimeType.startsWith('audio/')) {
         const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
-        messageContent = {
-            audio: fileBuffer,
+        return {
+            audio: mediaSource,
             mimetype: mimeType,
             ptt: isPtt,
         };
-    } else {
-        messageContent = {
-            document: fileBuffer,
-            mimetype: mimeType,
-            fileName: filename,
-            caption: caption || '',
-        };
     }
+
+    return {
+        document: mediaSource,
+        mimetype: mimeType,
+        fileName: filename,
+        caption,
+    };
+}
+
+async function sendMediaFile(sock, targetId, filePath, caption) {
+    const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
+    const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+    const fileBuffer = await fs.readFile(filePath);
+    const mediaSource = isNewsletter ? { url: filePath } : fileBuffer;
+
+    const forceDocumentForNewsletter = isNewsletter && NEWSLETTER_MEDIA_MODE === 'document';
+    const messageContent = buildMediaMessageContent(
+        filePath,
+        mimeType,
+        mediaSource,
+        caption || '',
+        forceDocumentForNewsletter,
+    );
 
     try {
         await sock.sendMessage(jid, messageContent);
@@ -287,17 +305,26 @@ async function sendMediaFile(sock, targetId, filePath, caption) {
             logger.warn(`Failed to send media with caption, retrying without caption...`);
             delete messageContent.caption;
             await sock.sendMessage(jid, messageContent);
-        } else {
-            throw err;
+            return;
         }
+
+        if (isNewsletter && !forceDocumentForNewsletter) {
+            logger.warn(`Newsletter media send failed (${err.message}). Retrying as document...`);
+            const docContent = buildMediaMessageContent(filePath, mimeType, mediaSource, caption || '', true);
+            await sock.sendMessage(jid, docContent);
+            return;
+        }
+
+        throw err;
     }
 }
 
 async function sendStickerFile(sock, targetId, filePath) {
     const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
     const fileBuffer = await fs.readFile(filePath);
     await sock.sendMessage(jid, {
-        sticker: fileBuffer,
+        sticker: isNewsletter ? { url: filePath } : fileBuffer,
         mimetype: 'image/webp',
     });
 }
