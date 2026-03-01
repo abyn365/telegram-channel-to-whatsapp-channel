@@ -6,6 +6,7 @@ import { downloadMedia, getMediaType, extractSenderInfo, getSenderName, buildTel
 import { sendMessage } from './whatsappClient.js';
 import { buildPayload } from './messageFormatter.js';
 import { initForwardedStore, buildForwardKey, hasForwarded, markForwarded } from './forwardedStore.js';
+import { translateToIndonesian, appendTranslation } from './translator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +15,20 @@ const TEMP_DIR = path.join(__dirname, '../temp');
 const TEXT_ONLY_TYPES = new Set(['text', 'webpage', 'poll', 'location', 'contact', 'unknown']);
 
 const SEND_DELAY_MS = parseInt(process.env.SEND_DELAY_MS, 10) || 1500;
+
+function buildSourceFallbackText(captionText, sourceLink, mediaType) {
+    const parts = [];
+    if (captionText && captionText.trim()) {
+        parts.push(captionText.trim());
+    }
+
+    const mediaLabel = mediaType || 'media';
+    if (sourceLink) {
+        parts.push(`🔗 Source (${mediaLabel}): ${sourceLink}`);
+    }
+
+    return parts.filter(Boolean).join('\n\n');
+}
 
 const messageQueue = [];
 let isProcessing = false;
@@ -71,16 +86,24 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         const sourceLink = await buildTelegramMessageLink(telegramClient, message);
         const payload = buildPayload(message, filePath, channelTitle, senderInfo);
 
+        const translated = await translateToIndonesian(payload.rawText || '');
+        if (translated) {
+            payload.text = appendTranslation(payload.text, translated);
+        }
+
         try {
             await sendMessage(whatsappSock, targetId, payload);
 
             const sendLinkFallback = String(process.env.WHATSAPP_SEND_SOURCE_LINK || 'true').toLowerCase() !== 'false';
             if (sendLinkFallback && filePath && sourceLink) {
-                await sendMessage(whatsappSock, targetId, {
-                    text: `🔗 Source: ${sourceLink}`,
-                    filePath: null,
-                    mediaType: 'text',
-                });
+                const fallbackText = buildSourceFallbackText(payload.text, sourceLink, mediaType);
+                if (fallbackText) {
+                    await sendMessage(whatsappSock, targetId, {
+                        text: fallbackText,
+                        filePath: null,
+                        mediaType: 'text',
+                    });
+                }
             }
 
             await markForwarded(forwardKey, {
