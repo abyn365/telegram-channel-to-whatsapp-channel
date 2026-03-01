@@ -1,6 +1,6 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, normalizeWhatsAppId } = require('./whatsappClient');
+const { createWhatsAppClient, normalizeWhatsAppId, resolveChannelTargetId, extractInviteCode } = require('./whatsappClient');
 
 async function followChannel(client, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
@@ -9,8 +9,8 @@ async function followChannel(client, targetId) {
         throw new Error('This command is only for WhatsApp channels (newsletters). Use a channel URL or ID like: 0029Vb7T8V460eBW2gKeNC1x');
     }
     
-    const channelId = normalizedId;
-    const inviteCode = normalizedId.replace('@newsletter', '');
+    const inviteCode = extractInviteCode(targetId) || normalizedId.replace('@newsletter', '');
+    const channelId = await resolveChannelTargetId(client, targetId);
     
     logger.info(`Attempting to follow WhatsApp channel: ${inviteCode}`);
     
@@ -19,6 +19,9 @@ async function followChannel(client, targetId) {
         const channel = await client.getChannelByInviteCode(inviteCode);
         if (channel) {
             logger.info(`Found channel: ${channel.name || 'Unknown'}`);
+            if (channel.id?._serialized) {
+                logger.info(`Resolved channel ID: ${channel.id._serialized}`);
+            }
         }
     } catch (err) {
         logger.warn(`Could not get channel info: ${err.message}`);
