@@ -1,6 +1,6 @@
 require('dotenv').config();
 const logger = require('./logger');
-const { createWhatsAppClient, initializeStore, normalizeWhatsAppId } = require('./whatsappClient');
+const { createWhatsAppClient, normalizeWhatsAppId } = require('./whatsappClient');
 
 async function followChannel(client, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
@@ -9,73 +9,30 @@ async function followChannel(client, targetId) {
         throw new Error('This command is only for WhatsApp channels (newsletters). Use a channel URL or ID like: 0029Vb7T8V460eBW2gKeNC1x');
     }
     
+    const channelId = normalizedId;
     const inviteCode = normalizedId.replace('@newsletter', '');
     
     logger.info(`Attempting to follow WhatsApp channel: ${inviteCode}`);
     
-    // Initialize Store first
-    await initializeStore(client);
-    
-    // Try to follow the channel
-    const result = await client.pupPage.evaluate(async (code) => {
-        try {
-            const store = window.Store;
-            const newsletterId = `${code}@newsletter`;
-            
-            // Method 1: Try Newsletter.subscribe
-            if (store.Newsletter && store.Newsletter.subscribe) {
-                try {
-                    await store.Newsletter.subscribe(newsletterId);
-                    return { success: true, method: 'Newsletter.subscribe', message: 'Successfully followed the channel!' };
-                } catch (e) {
-                    if (e.message && e.message.includes('already')) {
-                        return { success: true, method: 'Newsletter.subscribe', message: 'Already following this channel!' };
-                    }
-                    // Continue to other methods
-                }
-            }
-            
-            // Method 2: Try NewsletterManager
-            if (store.NewsletterManager && store.NewsletterManager.subscribe) {
-                try {
-                    await store.NewsletterManager.subscribe(newsletterId);
-                    return { success: true, method: 'NewsletterManager.subscribe', message: 'Successfully followed the channel!' };
-                } catch (e) {
-                    if (e.message && e.message.includes('already')) {
-                        return { success: true, method: 'NewsletterManager.subscribe', message: 'Already following this channel!' };
-                    }
-                }
-            }
-            
-            // Method 3: Try via Wap.newsletter
-            if (store.Wap && store.Wap.newsletter && store.Wap.newsletter.subscribe) {
-                try {
-                    await store.Wap.newsletter.subscribe(newsletterId);
-                    return { success: true, method: 'Wap.newsletter.subscribe', message: 'Successfully followed the channel!' };
-                } catch (e) {
-                    if (e.message && e.message.includes('already')) {
-                        return { success: true, method: 'Wap.newsletter.subscribe', message: 'Already following this channel!' };
-                    }
-                }
-            }
-            
-            // Method 4: Try to create newsletter subscription via addNewsletterParticipant
-            if (store.GroupUtils && store.GroupUtils.addNewsletterParticipant) {
-                try {
-                    await store.GroupUtils.addNewsletterParticipant(newsletterId);
-                    return { success: true, method: 'GroupUtils.addNewsletterParticipant', message: 'Successfully followed the channel!' };
-                } catch (e) {
-                    // Continue
-                }
-            }
-            
-            return { success: false, message: 'Could not find a method to follow the channel. You may need to follow it manually in WhatsApp.' };
-        } catch (e) {
-            return { success: false, error: e.message };
+    try {
+        const success = await client.subscribeToChannel(channelId);
+        
+        if (success) {
+            return { success: true, message: 'Successfully followed the channel!' };
+        } else {
+            return { success: false, message: 'Failed to follow the channel. You may need to follow it manually in WhatsApp.' };
         }
-    }, inviteCode);
-    
-    return result;
+    } catch (err) {
+        const errorMessage = err.message || '';
+        
+        if (errorMessage.includes('already') || errorMessage.includes('subscribed')) {
+            return { success: true, message: 'Already following this channel!' };
+        }
+        
+        logger.debug(`subscribeToChannel error: ${errorMessage}`);
+        
+        return { success: false, error: errorMessage };
+    }
 }
 
 async function main() {

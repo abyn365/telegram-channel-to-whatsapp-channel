@@ -3,7 +3,6 @@ const logger = require('./logger');
 const { createWhatsAppClient, listChats } = require('./whatsappClient');
 
 function getChannelUrl(id) {
-    // If it's a channel ID (has @newsletter suffix), convert to URL format
     if (id.includes('@newsletter')) {
         const channelId = id.replace('@newsletter', '');
         return `https://whatsapp.com/channel/${channelId}`;
@@ -14,11 +13,16 @@ function getChannelUrl(id) {
 async function main() {
     logger.info('Connecting to WhatsApp to list available chats...');
     const client = await createWhatsAppClient();
-    const chats = await listChats(client);
+    
+    let chats = [];
+    try {
+        chats = await listChats(client);
+    } catch (err) {
+        logger.error('Error listing chats:', err.message);
+    }
 
     console.log('\n=== Available WhatsApp Chats ===\n');
     
-    // Separate channels, groups, and chats
     const channels = chats.filter(c => c.type === 'channel');
     const groups = chats.filter(c => c.type === 'group');
     const regularChats = chats.filter(c => c.type === 'chat');
@@ -32,6 +36,10 @@ async function main() {
             if (url) console.log(`  URL: ${url}`);
             console.log('');
         });
+    } else {
+        console.log('--- WhatsApp Channels ---');
+        console.log('No channels found.');
+        console.log('');
     }
     
     if (groups.length > 0) {
@@ -56,11 +64,17 @@ async function main() {
     console.log('  - Or just the channel ID: 0029Vb7T8V460eBW2gKeNC1x');
     console.log('  - The code automatically adds @newsletter suffix');
     console.log('');
-    console.log('Note: If your channel doesn\'t appear above but you\'re an admin:');
-    console.log('  1. Make sure you\'ve "Followed" the channel from your WhatsApp app');
-    console.log('  2. Run: npm run follow-channel <channel-url> to subscribe via the bot');
-    console.log('  3. Or manually follow via WhatsApp: Updates tab → Find channel → Follow');
-    console.log('');
+    
+    if (channels.length === 0) {
+        console.log('=== Troubleshooting Channels ===');
+        console.log('If you have channels but they don\'t appear:');
+        console.log('  1. Make sure you\'ve "Followed" the channel from your WhatsApp app');
+        console.log('  2. Run: npm run follow-channel <channel-url> to subscribe via the bot');
+        console.log('  3. Example: npm run follow-channel https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
+        console.log('');
+        console.log('Note: As a channel admin, you may need to follow your own channel first.');
+        console.log('');
+    }
 
     await client.destroy();
     process.exit(0);
