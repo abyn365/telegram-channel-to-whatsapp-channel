@@ -2,9 +2,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs-extra';
 import logger from './logger.js';
-import { downloadMedia, getMediaType, extractSenderInfo, getSenderName } from './telegramClient.js';
+import { downloadMedia, getMediaType, extractSenderInfo, getSenderName, buildTelegramMessageLink } from './telegramClient.js';
 import { sendMessage } from './whatsappClient.js';
 import { buildPayload } from './messageFormatter.js';
+import { initForwardedStore, buildForwardKey, hasForwarded, markForwarded } from './forwardedStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,8 +43,16 @@ function enqueue(task) {
 }
 
 async function forwardMessage(telegramClient, whatsappSock, message, targetId, channelTitle) {
+    await initForwardedStore();
+
     enqueue(async () => {
         const mediaType = getMediaType(message);
+        const forwardKey = buildForwardKey(message, targetId);
+        if (hasForwarded(forwardKey)) {
+            logger.info(`Skipping duplicate forward for message id=${message.id} from "${channelTitle}"`);
+            return;
+        }
+
         logger.info(`Forwarding message id=${message.id} type=${mediaType} from "${channelTitle}"`);
 
         let filePath = null;
@@ -59,10 +68,28 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
             if (senderName) senderInfo.name = senderName;
         }
 
+        const sourceLink = await buildTelegramMessageLink(telegramClient, message);
         const payload = buildPayload(message, filePath, channelTitle, senderInfo);
 
         try {
             await sendMessage(whatsappSock, targetId, payload);
+
+            const sendLinkFallback = String(process.env.WHATSAPP_SEND_SOURCE_LINK || 'true').toLowerCase() !== 'false';
+            if (sendLinkFallback && filePath && sourceLink) {
+                await sendMessage(whatsappSock, targetId, {
+                    text: `🔗 Source: ${sourceLink}`,
+                    filePath: null,
+                    mediaType: 'text',
+                });
+            }
+
+            await markForwarded(forwardKey, {
+                messageId: message.id,
+                channelTitle,
+                mediaType,
+                sourceLink,
+            });
+
             logger.info(`Message id=${message.id} forwarded to WhatsApp successfully.`);
         } catch (err) {
             logger.error(`Failed to forward message id=${message.id}:`, err);

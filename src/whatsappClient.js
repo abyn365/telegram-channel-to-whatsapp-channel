@@ -236,70 +236,110 @@ async function resolveNewsletterJid(sock, targetId) {
     return normalizedId;
 }
 
+
+function assertWhatsAppSendResult(result, jid, contextLabel) {
+    const messageId = result?.key?.id || result?.key?.remoteJid || result?.status;
+    if (!messageId) {
+        throw new Error(`WhatsApp returned an empty send result for ${contextLabel} -> ${jid}`);
+    }
+}
+
 async function sendText(sock, targetId, text) {
     if (!text || !text.trim()) return;
     const jid = await resolveNewsletterJid(sock, targetId);
-    await sock.sendMessage(jid, { text });
+    const result = await sock.sendMessage(jid, { text });
+    assertWhatsAppSendResult(result, jid, 'text');
+}
+
+const NEWSLETTER_MEDIA_MODE = (process.env.NEWSLETTER_MEDIA_MODE || 'document').trim().toLowerCase();
+
+function buildMediaMessageContent(filePath, mimeType, mediaSource, caption = '', forceDocument = false) {
+    const filename = path.basename(filePath);
+
+    if (!forceDocument && mimeType.startsWith('image/') && mimeType !== 'image/gif') {
+        return {
+            image: mediaSource,
+            caption,
+            mimetype: mimeType,
+        };
+    }
+
+    if (!forceDocument && (mimeType.startsWith('video/') || mimeType === 'image/gif')) {
+        return {
+            video: mediaSource,
+            caption,
+            mimetype: mimeType.startsWith('image/') ? 'video/mp4' : mimeType,
+            gifPlayback: mimeType === 'image/gif',
+        };
+    }
+
+    if (!forceDocument && mimeType.startsWith('audio/')) {
+        const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
+        return {
+            audio: mediaSource,
+            mimetype: mimeType,
+            ptt: isPtt,
+        };
+    }
+
+    return {
+        document: mediaSource,
+        mimetype: mimeType,
+        fileName: filename,
+        caption,
+    };
 }
 
 async function sendMediaFile(sock, targetId, filePath, caption) {
     const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
     const fileBuffer = await fs.readFile(filePath);
-    const filename = path.basename(filePath);
+    const mediaSource = isNewsletter ? { url: filePath } : fileBuffer;
 
-    let messageContent;
-
-    if (mimeType.startsWith('image/') && mimeType !== 'image/gif') {
-        messageContent = {
-            image: fileBuffer,
-            caption: caption || '',
-            mimetype: mimeType,
-        };
-    } else if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
-        messageContent = {
-            video: fileBuffer,
-            caption: caption || '',
-            mimetype: mimeType.startsWith('image/') ? 'video/mp4' : mimeType,
-            gifPlayback: mimeType === 'image/gif',
-        };
-    } else if (mimeType.startsWith('audio/')) {
-        const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
-        messageContent = {
-            audio: fileBuffer,
-            mimetype: mimeType,
-            ptt: isPtt,
-        };
-    } else {
-        messageContent = {
-            document: fileBuffer,
-            mimetype: mimeType,
-            fileName: filename,
-            caption: caption || '',
-        };
-    }
+    const forceDocumentForNewsletter = isNewsletter && NEWSLETTER_MEDIA_MODE === 'document';
+    const messageContent = buildMediaMessageContent(
+        filePath,
+        mimeType,
+        mediaSource,
+        caption || '',
+        forceDocumentForNewsletter,
+    );
 
     try {
-        await sock.sendMessage(jid, messageContent);
+        const result = await sock.sendMessage(jid, messageContent);
+        assertWhatsAppSendResult(result, jid, "media");
     } catch (err) {
         // If sending with caption fails, try without caption as fallback
         if (caption && err.message?.includes('caption')) {
             logger.warn(`Failed to send media with caption, retrying without caption...`);
             delete messageContent.caption;
-            await sock.sendMessage(jid, messageContent);
-        } else {
-            throw err;
+            const retryResult = await sock.sendMessage(jid, messageContent);
+            assertWhatsAppSendResult(retryResult, jid, "media-retry-no-caption");
+            return;
         }
+
+        if (isNewsletter && !forceDocumentForNewsletter) {
+            logger.warn(`Newsletter media send failed (${err.message}). Retrying as document...`);
+            const docContent = buildMediaMessageContent(filePath, mimeType, mediaSource, caption || '', true);
+            const docResult = await sock.sendMessage(jid, docContent);
+            assertWhatsAppSendResult(docResult, jid, "media-retry-document");
+            return;
+        }
+
+        throw err;
     }
 }
 
 async function sendStickerFile(sock, targetId, filePath) {
     const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
     const fileBuffer = await fs.readFile(filePath);
-    await sock.sendMessage(jid, {
-        sticker: fileBuffer,
+    const result = await sock.sendMessage(jid, {
+        sticker: isNewsletter ? { url: filePath } : fileBuffer,
         mimetype: 'image/webp',
     });
+    assertWhatsAppSendResult(result, jid, 'sticker');
 }
 
 async function sendMessage(sock, targetId, payload) {
