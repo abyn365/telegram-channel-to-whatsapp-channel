@@ -279,7 +279,18 @@ async function sendMediaFile(sock, targetId, filePath, caption) {
         };
     }
 
-    await sock.sendMessage(jid, messageContent);
+    try {
+        await sock.sendMessage(jid, messageContent);
+    } catch (err) {
+        // If sending with caption fails, try without caption as fallback
+        if (caption && err.message?.includes('caption')) {
+            logger.warn(`Failed to send media with caption, retrying without caption...`);
+            delete messageContent.caption;
+            await sock.sendMessage(jid, messageContent);
+        } else {
+            throw err;
+        }
+    }
 }
 
 async function sendStickerFile(sock, targetId, filePath) {
