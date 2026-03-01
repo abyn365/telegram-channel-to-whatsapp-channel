@@ -177,6 +177,45 @@ function getContactText(message) {
     return `👤 Contact: ${name}${phone ? ` — ${phone}` : ''}`;
 }
 
+function extractSenderInfo(message, client) {
+    const info = {
+        name: null,
+        phone: null,
+    };
+
+    if (message.postAuthor) {
+        info.name = message.postAuthor;
+    }
+
+    if (message.fromId) {
+        const fromIdStr = String(message.fromId);
+        if (fromIdStr.startsWith('user')) {
+            const userId = fromIdStr.replace('user', '');
+            info.phone = userId;
+        }
+    }
+
+    return info;
+}
+
+function getSenderName(client, fromId) {
+    if (!fromId) return null;
+    
+    try {
+        const entity = client.getEntity(fromId);
+        if (entity) {
+            if (entity.firstName) {
+                const fullName = [entity.firstName, entity.lastName].filter(Boolean).join(' ');
+                return fullName || entity.username || null;
+            }
+            return entity.username || null;
+        }
+    } catch {
+        // ignore
+    }
+    return null;
+}
+
 function startListener(client, channels, onMessage) {
     client.addEventHandler(async (event) => {
         try {
@@ -201,5 +240,7 @@ module.exports = {
     getPollText,
     getLocationText,
     getContactText,
+    extractSenderInfo,
+    getSenderName,
     startListener,
 };
