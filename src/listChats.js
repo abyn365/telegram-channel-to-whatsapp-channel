@@ -54,7 +54,13 @@ async function main() {
     console.log('For WhatsApp Channels, you can use:');
     console.log('  - The full URL: https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x');
     console.log('  - Or just the channel ID: 0029Vb7T8V460eBW2gKeNC1x');
-    console.log('  - The code automatically adds @newsletter suffix\n');
+    console.log('  - The code automatically adds @newsletter suffix');
+    console.log('');
+    console.log('Note: If your channel doesn\'t appear above but you\'re an admin:');
+    console.log('  1. Make sure you\'ve "Followed" the channel from your WhatsApp app');
+    console.log('  2. Run: npm run follow-channel <channel-url> to subscribe via the bot');
+    console.log('  3. Or manually follow via WhatsApp: Updates tab → Find channel → Follow');
+    console.log('');
 
     await client.destroy();
     process.exit(0);
