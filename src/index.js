@@ -33,7 +33,7 @@ async function main() {
         logger.info(`Watching channel: ${ch} → "${title || 'Unknown'}"`);
     }
 
-    startListener(telegramClient, channels, async (message) => {
+    startListener(telegramClient, channelEntities, async (message) => {
         const chatKey = String(message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || '');
         const titleByPeer = channelTitles[chatKey] || channelTitles[`-100${chatKey}`] || '';
 
@@ -48,7 +48,7 @@ async function main() {
         }
 
         await forwardMessage(telegramClient, whatsappClient, message, targetId, title);
-    });
+    }, channels);
 
     logger.info('Forwarder is running. Waiting for new messages...');
 

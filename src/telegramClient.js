@@ -256,7 +256,7 @@ function getSenderName(client, fromId) {
     return null;
 }
 
-function startListener(client, channels, onMessage) {
+function startListener(client, channelFilters, onMessage, channelLabels = channelFilters) {
     client.addEventHandler(async (event) => {
         try {
             const msg = event.message;
@@ -265,9 +265,9 @@ function startListener(client, channels, onMessage) {
         } catch (err) {
             logger.error('Error handling Telegram message event:', err);
         }
-    }, new NewMessage({ chats: channels }));
+    }, new NewMessage({ chats: channelFilters }));
 
-    const channelLabels = channels.map((channel) => {
+    const labels = (channelLabels || []).map((channel) => {
         if (typeof channel === 'string') return channel;
         if (channel?.title) return channel.title;
         if (channel?.username) return `@${channel.username}`;
@@ -275,7 +275,7 @@ function startListener(client, channels, onMessage) {
         return 'unknown';
     });
 
-    logger.info(`Listening on Telegram channels: ${channelLabels.join(', ')}`);
+    logger.info(`Listening on Telegram channels: ${labels.join(', ')}`);
 }
 
 module.exports = {

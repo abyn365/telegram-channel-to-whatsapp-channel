@@ -8,6 +8,8 @@ const { execSync } = require('child_process');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const resolvedTargets = new Set();
+
 function findChromeExecutable() {
     const possiblePaths = [
         '/usr/bin/google-chrome-stable',
@@ -189,42 +191,104 @@ async function listChats(client, retries = 3) {
  */
 function normalizeWhatsAppId(targetId) {
     if (!targetId) return targetId;
-    
-    // Already has @newsletter suffix, no change needed
-    if (targetId.includes('@newsletter')) {
-        return targetId;
+
+    const sanitized = String(targetId).trim().replace(/^['"]+|['"]+$/g, '');
+    if (!sanitized) return sanitized;
+
+    if (/@newsletter$/i.test(sanitized)) {
+        return sanitized.replace(/@newsletter$/i, '@newsletter');
     }
-    
-    // Check if it's a WhatsApp channel URL
-    const channelUrlMatch = targetId.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
+
+    if (sanitized.includes('@')) {
+        return sanitized;
+    }
+
+    const channelUrlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
     if (channelUrlMatch) {
         return `${channelUrlMatch[1]}@newsletter`;
     }
-    
-    // Check if it's a raw channel ID (alphanumeric, 15+ characters)
-    // WhatsApp channel IDs are typically long alphanumeric strings
-    // They can start with letters or digits
-    if (/^[a-zA-Z0-9]{15,}$/.test(targetId)) {
-        return `${targetId}@newsletter`;
+
+    if (/^120\d{10,}$/.test(sanitized)) {
+        return `${sanitized}@g.us`;
     }
-    
-    return targetId;
+
+    if (/^[a-zA-Z0-9]{15,}$/.test(sanitized)) {
+        return `${sanitized}@newsletter`;
+    }
+
+    return sanitized;
+}
+
+async function ensureTargetAvailable(client, targetId) {
+    if (!targetId || resolvedTargets.has(targetId)) return;
+
+    let lastError;
+
+    try {
+        const chat = await client.getChatById(targetId);
+        if (chat) {
+            resolvedTargets.add(targetId);
+            return;
+        }
+    } catch (err) {
+        lastError = err;
+    }
+
+    if (/@newsletter$/i.test(targetId)) {
+        const inviteCode = targetId.replace(/@newsletter$/i, '');
+        try {
+            const channel = await client.getChannelByInviteCode(inviteCode);
+            if (channel) {
+                resolvedTargets.add(targetId);
+                return;
+            }
+        } catch (err) {
+            lastError = err;
+        }
+    }
+
+    const message = `WhatsApp target ID "${targetId}" could not be resolved. Make sure it matches a chat, group, or channel you can post to.`;
+    const error = new Error(message);
+    if (lastError) {
+        error.cause = lastError;
+    }
+    throw error;
+}
+
+function shouldRetrySend(err) {
+    const message = err?.message || '';
+    return message.includes('Execution context was destroyed') || message.includes('t: t');
+}
+
+async function sendWithRetry(client, targetId, content, options) {
+    const normalizedId = normalizeWhatsAppId(targetId);
+    await ensureTargetAvailable(client, normalizedId);
+
+    try {
+        return await client.sendMessage(normalizedId, content, options);
+    } catch (err) {
+        if (!shouldRetrySend(err)) {
+            throw err;
+        }
+        logger.warn(`WhatsApp send failed (${err.message}). Retrying once...`);
+        resolvedTargets.delete(normalizedId);
+        await ensureTargetAvailable(client, normalizedId);
+        return client.sendMessage(normalizedId, content, options);
+    }
 }
 
 async function sendText(client, targetId, text) {
     if (!text || !text.trim()) return;
-    const normalizedId = normalizeWhatsAppId(targetId);
-    await client.sendMessage(normalizedId, text);
+    await sendWithRetry(client, targetId, text);
 }
 
 async function sendMediaFile(client, targetId, filePath, caption) {
-    const normalizedId = normalizeWhatsAppId(targetId);
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
     const data = await fs.readFile(filePath);
     const base64 = data.toString('base64');
     const filename = path.basename(filePath);
     const media = new MessageMedia(mimeType, base64, filename);
-    await client.sendMessage(normalizedId, media, { caption: caption || '' });
+    await sendWithRetry(client, targetId, media, { caption: caption || '' });
 }
 
 async function sendMessage(client, targetId, payload) {
