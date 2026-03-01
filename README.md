@@ -263,6 +263,8 @@ libretranslate --host 0.0.0.0 --port 5000
 
 Untuk Ubuntu/Debian dengan error `externally-managed-environment`, **jangan** install global via `pip install libretranslate`; gunakan virtualenv seperti di atas (atau biarkan `npm start`/PM2 yang membuat virtualenv otomatis).
 
+Jika venv gagal dibuat, install paket sistem: `apt install python3-venv`.
+
 Quick API check:
 
 ```bash
