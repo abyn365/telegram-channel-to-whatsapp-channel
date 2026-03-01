@@ -7,9 +7,13 @@ const TRANSLATE_TARGET = process.env.TRANSLATE_TARGET || 'id';
 const TRANSLATION_PREFIX = process.env.TRANSLATION_PREFIX || 'id';
 const TRANSLATION_TIMEOUT_MS = Math.max(parseInt(process.env.TRANSLATION_TIMEOUT_MS, 10) || 8000, 1000);
 const TRANSLATE_USE_CAPTION_WHEN_EMPTY = String(process.env.TRANSLATE_USE_CAPTION_WHEN_EMPTY || 'true').toLowerCase() !== 'false';
+const MAX_TRANSLATION_LENGTH = parseInt(process.env.MAX_TRANSLATION_LENGTH, 10) || 5000;
 
 let hasLoggedTranslatorReady = false;
 let hasWarnedTranslatorFailure = false;
+let translatorHealthy = true;
+let consecutiveFailures = 0;
+const MAX_CONSECUTIVE_FAILURES = 5;
 
 function getTextForTranslation(rawText, captionText) {
     const raw = String(rawText || '').trim();
@@ -68,10 +72,22 @@ async function requestTranslation(text, controller, mode = 'form') {
 }
 
 async function translateToIndonesian(rawText, captionText = '') {
+    // Skip if translation is disabled
     if (!TRANSLATE_TO_ID) return null;
+    
+    // Skip if translator has been unhealthy for too many consecutive failures
+    if (!translatorHealthy) {
+        return null;
+    }
 
     const text = getTextForTranslation(rawText, captionText);
     if (!text) return null;
+
+    // Skip if text is too long
+    if (text.length > MAX_TRANSLATION_LENGTH) {
+        logger.debug(`Skipping translation - text too long (${text.length} chars)`);
+        return null;
+    }
 
     if (!hasLoggedTranslatorReady) {
         hasLoggedTranslatorReady = true;
@@ -83,23 +99,47 @@ async function translateToIndonesian(rawText, captionText = '') {
 
     try {
         let translated = '';
+        
+        // Try form-encoded first (more compatible)
         try {
             translated = await requestTranslation(text, controller, 'form');
-        } catch {
-            translated = await requestTranslation(text, controller, 'json');
+        } catch (formErr) {
+            // Fallback to JSON
+            try {
+                translated = await requestTranslation(text, controller, 'json');
+            } catch (jsonErr) {
+                throw formErr;
+            }
         }
+
+        // Reset failure counter on success
+        consecutiveFailures = 0;
+        translatorHealthy = true;
 
         if (!translated) return null;
 
+        // Skip if translation is identical to source
         if (translated.toLowerCase() === text.toLowerCase()) {
             return null;
         }
 
         return translated;
     } catch (err) {
+        consecutiveFailures++;
+        
+        // Mark translator as unhealthy after too many failures
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            translatorHealthy = false;
+            if (!hasWarnedTranslatorFailure) {
+                hasWarnedTranslatorFailure = true;
+                logger.warn(`Translator marked as unhealthy after ${consecutiveFailures} consecutive failures. Translation disabled until restart.`);
+                logger.warn(`Ensure LibreTranslate is running: libretranslate --host 0.0.0.0 --port 5000`);
+            }
+        }
+        
         if (!hasWarnedTranslatorFailure) {
             hasWarnedTranslatorFailure = true;
-            logger.warn(`Translation unavailable (${err.message || err}). Ensure LibreTranslate is running: libretranslate --host 0.0.0.0 --port 5000`);
+            logger.warn(`Translation failed: ${err.message || err}. Ensure LibreTranslate is running.`);
         } else {
             logger.debug(`Translation skipped: ${err.message || err}`);
         }
@@ -115,4 +155,22 @@ function appendTranslation(baseText, translatedText) {
     return `${baseText}\n${prefix} ${translatedText}`;
 }
 
-export { translateToIndonesian, appendTranslation };
+// Check if translator is available
+function isTranslatorHealthy() {
+    return translatorHealthy && TRANSLATE_TO_ID;
+}
+
+// Reset translator health (useful for manual intervention)
+function resetTranslatorHealth() {
+    consecutiveFailures = 0;
+    translatorHealthy = true;
+    hasWarnedTranslatorFailure = false;
+    logger.info('Translator health reset');
+}
+
+export { 
+    translateToIndonesian, 
+    appendTranslation, 
+    isTranslatorHealthy,
+    resetTranslatorHealth 
+};
