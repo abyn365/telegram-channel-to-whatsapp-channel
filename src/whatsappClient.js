@@ -278,12 +278,56 @@ async function resolveNewsletterJid(sock, targetId) {
 }
 
 
+// Helper function to wait for message acknowledgment
+async function waitForAck(sock, messageId, jid, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            resolve(false);
+        }, timeoutMs);
+
+        // Listen for message ack
+        const handler = (update) => {
+            const msgKey = update.key?.id;
+            const remoteJid = update.key?.remoteJid;
+            
+            if (msgKey === messageKey || (remoteJid === jid && update.update?.receipt)) {
+                // Check for final status
+                const receipt = update.update?.receipt;
+                if (receipt === 'read' || receipt === 'played' || update.update?.status === 'read') {
+                    clearTimeout(timeout);
+                    sock.ev.off('messages.update', handler);
+                    resolve(true);
+                }
+            }
+        };
+        
+        sock.ev.on('messages.update', handler);
+    });
+}
+
+// Helper to get message key prefix for matching
+let messageKey = '';
+
 function assertWhatsAppSendResult(result, jid, contextLabel) {
     const messageId = result?.key?.id || result?.key?.remoteJid || result?.status;
+    messageKey = messageId; // Store for ack checking
+    
     if (!messageId) {
         throw new Error(`WhatsApp returned an empty send result for ${contextLabel} -> ${jid}`);
     }
-    logger.debug(`WhatsApp message sent successfully: ${messageId} (${contextLabel})`);
+    
+    // Check for explicit failure indicators
+    const status = result?.status;
+    if (status === 'error' || status === 'failed') {
+        throw new Error(`WhatsApp send failed with status: ${status} for ${contextLabel} -> ${jid}`);
+    }
+    
+    // For newsletters, log extra info
+    if (/@newsletter$/i.test(jid)) {
+        logger.debug(`Newsletter message sent: ${messageId} (${contextLabel}), status: ${status}, remoteJid: ${result?.key?.remoteJid}`);
+    } else {
+        logger.debug(`WhatsApp message sent: ${messageId} (${contextLabel}), status: ${status}`);
+    }
 }
 
 async function sendText(sock, targetId, text) {
@@ -380,22 +424,31 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     // Determine media mode
     const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'native').trim().toLowerCase();
     
+    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), mode: ${mediaMode}`);
+    
     // Generate thumbnail for images
     let thumbnail = null;
     if (mimeType.startsWith('image/')) {
         thumbnail = await generateThumbnail(filePath, mimeType);
     }
 
-    // Strategy: Try native first, then fallback to document
+    // Strategy: Try native first, then fallback to document based on mode
     const strategies = [];
+    const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'hybrid').trim().toLowerCase();
     
-    if (isNewsletter && mediaMode === 'document') {
-        strategies.push('document');
-    } else {
-        strategies.push('native');
-        if (isNewsletter) {
-            strategies.push('document'); // Fallback for newsletters
+    if (isNewsletter) {
+        if (mediaMode === 'document') {
+            strategies.push('document');
+        } else if (mediaMode === 'native') {
+            strategies.push('native');
+        } else {
+            // hybrid - try native first, then fallback to document
+            strategies.push('native');
+            strategies.push('document');
         }
+    } else {
+        // For regular chats, always use native
+        strategies.push('native');
     }
 
     let lastError = null;
@@ -408,11 +461,13 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
                 sock, jid, fileBuffer, mimeType, filename, caption, thumbnail
             );
 
-            logger.debug(`Attempting to send media with strategy: ${strategy}, hasCaption: ${hasCaption}`);
+            logger.debug(`Attempting to send media with strategy: ${strategy}, hasCaption: ${hasCaption}, jid: ${jid}`);
             
             const result = await sock.sendMessage(jid, content);
             assertWhatsAppSendResult(result, jid, `media-${strategy}`);
             mediaSent = true;
+            
+            logger.info(`Media sent successfully via ${strategy} strategy to ${jid}`);
 
             // For newsletters, if caption wasn't sent with media, send as separate text
             if (isNewsletter && caption && caption.trim() && !hasCaption) {
@@ -430,7 +485,10 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
             return { success: true, mediaSent, captionSent, strategy };
         } catch (err) {
             lastError = err;
-            logger.debug(`Strategy ${strategy} failed: ${err.message}`);
+            logger.warn(`Strategy ${strategy} failed: ${err.message}`);
+            if (err.stack) {
+                logger.debug(`Stack trace: ${err.stack}`);
+            }
             
             // If media was sent but caption failed, try sending caption separately
             if (mediaSent && caption && caption.trim() && !captionSent) {
@@ -451,6 +509,7 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     }
 
     // All strategies failed
+    logger.error(`All media sending strategies failed. Last error: ${lastError?.message}`);
     throw lastError || new Error('Failed to send media after all attempts');
 }
 
