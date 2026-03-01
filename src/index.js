@@ -1,16 +1,16 @@
-require('dotenv').config();
-const logger = require('./logger');
-const {
+import 'dotenv/config';
+import logger from './logger.js';
+import {
     createTelegramClient,
     resolveChannelTargets,
     resolveChannelEntities,
     startListener,
-} = require('./telegramClient');
-const {
+} from './telegramClient.js';
+import {
     createWhatsAppClientWithReconnect,
     checkNewsletterAccess,
-} = require('./whatsappClient');
-const { forwardMessage } = require('./forwarder');
+} from './whatsappClient.js';
+import { forwardMessage } from './forwarder.js';
 
 async function main() {
     logger.info('Starting Telegram → WhatsApp forwarder (powered by Baileys — no Chrome needed)...');

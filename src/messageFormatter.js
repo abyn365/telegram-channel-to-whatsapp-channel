@@ -1,11 +1,11 @@
-const {
+import {
     extractText,
     extractWebPageUrl,
     getMediaType,
     getPollText,
     getLocationText,
     getContactText,
-} = require('./telegramClient');
+} from './telegramClient.js';
 
 const MEDIA_EMOJI = {
     photo: '🖼️',
@@ -69,4 +69,4 @@ function buildPayload(message, filePath, channelTitle, senderInfo) {
     return { text, filePath, mediaType };
 }
 
-module.exports = { buildPayload };
+export { buildPayload };

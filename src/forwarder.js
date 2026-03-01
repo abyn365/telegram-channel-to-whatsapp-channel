@@ -1,8 +1,13 @@
-const path = require('path');
-const logger = require('./logger');
-const { downloadMedia, getMediaType, extractSenderInfo, getSenderName } = require('./telegramClient');
-const { sendMessage } = require('./whatsappClient');
-const { buildPayload } = require('./messageFormatter');
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs-extra';
+import logger from './logger.js';
+import { downloadMedia, getMediaType, extractSenderInfo, getSenderName } from './telegramClient.js';
+import { sendMessage } from './whatsappClient.js';
+import { buildPayload } from './messageFormatter.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const TEMP_DIR = path.join(__dirname, '../temp');
 const TEXT_ONLY_TYPES = new Set(['text', 'webpage', 'poll', 'location', 'contact', 'unknown']);
@@ -62,11 +67,10 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         } catch (err) {
             logger.error(`Failed to forward message id=${message.id}:`, err);
             if (filePath) {
-                const fs = require('fs-extra');
                 await fs.remove(filePath).catch(() => {});
             }
         }
     });
 }
 
-module.exports = { forwardMessage };
+export { forwardMessage };
