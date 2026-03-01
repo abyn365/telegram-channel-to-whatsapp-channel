@@ -178,6 +178,29 @@ async function downloadMedia(client, message, tempDir) {
     }
 }
 
+
+async function buildTelegramMessageLink(client, message) {
+    const msgId = message?.id;
+    if (!msgId) return null;
+
+    try {
+        const chatEntity = message.chat || (message.peerId ? await client.getEntity(message.peerId) : null);
+        if (chatEntity?.username) {
+            return `https://t.me/${chatEntity.username}/${msgId}`;
+        }
+
+        const rawChannelId = message.peerId?.channelId || chatEntity?.id;
+        if (rawChannelId) {
+            const id = String(rawChannelId).replace(/^-100/, '');
+            return `https://t.me/c/${id}/${msgId}`;
+        }
+    } catch {
+        // ignore link build failures
+    }
+
+    return null;
+}
+
 function extractText(message) {
     return message.message || '';
 }
@@ -394,6 +417,7 @@ export {
     getContactText,
     extractSenderInfo,
     getSenderName,
+    buildTelegramMessageLink,
     startListener,
     startPollingChannels,
 };
