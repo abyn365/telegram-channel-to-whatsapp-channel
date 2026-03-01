@@ -133,6 +133,12 @@ This prints all available chats with their IDs, organized by type:
 - **Groups** - shown with `[GROUP]`
 - **Chats** - shown with `[CHAT]`
 
+If your channel still doesn’t appear, you can force resolution with a link:
+
+```bash
+npm run list-chats https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x
+```
+
 Copy the ID into `WHATSAPP_TARGET_ID` in `.env`. For WhatsApp channels, you can use:
 - The full URL: `https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x`
 - Or just the channel ID: `0029Vb7T8V460eBW2gKeNC1x`
