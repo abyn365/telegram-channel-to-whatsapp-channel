@@ -1,10 +1,10 @@
-require('dotenv').config();
-const logger = require('./logger');
-const {
+import 'dotenv/config';
+import logger from './logger.js';
+import {
     createWhatsAppClientWithReconnect,
     normalizeWhatsAppId,
     extractInviteCode,
-} = require('./whatsappClient');
+} from './whatsappClient.js';
 
 async function followChannel(sock, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);

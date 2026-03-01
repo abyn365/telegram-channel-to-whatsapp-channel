@@ -1,11 +1,15 @@
-const { TelegramClient } = require('telegram');
-const { StringSession } = require('telegram/sessions');
-const { NewMessage } = require('telegram/events');
-const { Api } = require('telegram');
-const readline = require('readline');
-const fs = require('fs-extra');
-const path = require('path');
-const logger = require('./logger');
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions';
+import { NewMessage } from 'telegram/events';
+import { Api } from 'telegram';
+import readline from 'readline';
+import fs from 'fs-extra';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import logger from './logger.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const SESSION_FILE = path.join(__dirname, '../sessions/telegram.session');
 
@@ -139,7 +143,7 @@ async function downloadMedia(client, message, tempDir) {
             fileName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
             if (!path.extname(fileName)) {
                 const mime = doc.mimeType || '';
-                const mimeExt = require('mime-types').extension(mime);
+                const mimeExt = (await import('mime-types')).extension(mime);
                 if (mimeExt) fileName += `.${mimeExt}`;
             }
         } else if (media.webpage) {
@@ -278,7 +282,7 @@ function startListener(client, channelFilters, onMessage, channelLabels = channe
     logger.info(`Listening on Telegram channels: ${labels.join(', ')}`);
 }
 
-module.exports = {
+export {
     createTelegramClient,
     resolveChannelTargets,
     resolveChannelEntities,

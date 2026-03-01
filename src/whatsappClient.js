@@ -1,17 +1,16 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-    DisconnectReason,
-    Browsers,
-} = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
-const pino = require('pino');
-const qrcode = require('qrcode-terminal');
-const fs = require('fs-extra');
-const mime = require('mime-types');
-const path = require('path');
-const logger = require('./logger');
+import makeWASocket from '@whiskeysockets/baileys';
+import { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import pino from 'pino';
+import qrcode from 'qrcode-terminal';
+import fs from 'fs-extra';
+import mime from 'mime-types';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import logger from './logger.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -325,7 +324,7 @@ async function checkNewsletterAccess(sock, targetId) {
     return false;
 }
 
-module.exports = {
+export {
     createWhatsAppClientWithReconnect,
     sendMessage,
     sendText,

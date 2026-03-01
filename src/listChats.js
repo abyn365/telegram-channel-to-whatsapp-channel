@@ -1,11 +1,11 @@
-require('dotenv').config();
-const logger = require('./logger');
-const {
+import 'dotenv/config';
+import logger from './logger.js';
+import {
     createWhatsAppClientWithReconnect,
     normalizeWhatsAppId,
     extractInviteCode,
     resolveNewsletterJid,
-} = require('./whatsappClient');
+} from './whatsappClient.js';
 
 async function main() {
     logger.info('Connecting to WhatsApp to list available chats...');
