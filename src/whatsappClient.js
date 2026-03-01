@@ -4,17 +4,54 @@ const fs = require('fs-extra');
 const mime = require('mime-types');
 const path = require('path');
 const logger = require('./logger');
+const { execSync } = require('child_process');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function findChromeExecutable() {
+    const possiblePaths = [
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/snap/bin/chromium',
+        '/usr/bin/chromium-browser-unstable',
+    ];
+
+    for (const chromePath of possiblePaths) {
+        if (fs.existsSync(chromePath)) {
+            logger.info(`Found Chrome executable at: ${chromePath}`);
+            return chromePath;
+        }
+    }
+
+    // Try to find using which command
+    try {
+        const chromePath = execSync('which google-chrome-stable || which google-chrome || which chromium-browser || which chromium', {
+            encoding: 'utf-8',
+        }).trim();
+        if (chromePath) {
+            logger.info(`Found Chrome executable via which: ${chromePath}`);
+            return chromePath;
+        }
+    } catch (e) {
+        // Ignore
+    }
+
+    logger.warn('Chrome/Chromium executable not found, relying on Puppeteer bundled Chrome');
+    return undefined;
+}
+
 async function createWhatsAppClient() {
+    const executablePath = findChromeExecutable();
+
     const client = new Client({
         authStrategy: new LocalAuth({
             dataPath: path.join(__dirname, '../sessions/whatsapp'),
         }),
         puppeteer: {
-            headless: true,
-            executablePath: '/usr/bin/google-chrome-stable',
+            headless: 'new',
+            executablePath: executablePath,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -22,12 +59,15 @@ async function createWhatsAppClient() {
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
                 '--no-zygote',
-                '--single-process',
                 '--disable-gpu',
                 '--disable-extensions',
                 '--disable-default-apps',
                 '--disable-translate',
                 '--disable-sync',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=IsolateOrigins,site-per-process',
             ],
         },
     });
@@ -58,7 +98,21 @@ async function createWhatsAppClient() {
             logger.warn(`WhatsApp disconnected: ${reason}`);
         });
 
-        client.initialize().catch(reject);
+        // Handle puppeteer/browser errors during initialization
+        client.on('error', (error) => {
+            clearTimeout(timeout);
+            logger.error('WhatsApp client error during initialization:', error);
+            if (error.message.includes('TargetCloseError') || error.message.includes('Session closed')) {
+                reject(new Error('Browser closed unexpectedly during initialization. This may be due to resource constraints or Chrome compatibility issues. Try again or check system resources.'));
+            } else {
+                reject(error);
+            }
+        });
+
+        client.initialize().catch((err) => {
+            clearTimeout(timeout);
+            reject(err);
+        });
     });
 
     return client;
