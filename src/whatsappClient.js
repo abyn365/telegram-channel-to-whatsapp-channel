@@ -414,9 +414,6 @@ const MEDIA_UPLOAD_STRATEGIES = {
     },
 };
 
-// Hybrid caption mode: send media first, then caption as separate message
-const HYBRID_CAPTION_MODE = String(process.env.WHATSAPP_HYBRID_CAPTION_MODE || 'false').toLowerCase() === 'true';
-
 async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     const jid = await resolveNewsletterJid(sock, targetId);
     const isNewsletter = /@newsletter$/i.test(jid);
@@ -427,7 +424,7 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     // Determine media mode
     const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'hybrid').trim().toLowerCase();
     
-    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), mode: ${mediaMode}, hybridCaption: ${HYBRID_CAPTION_MODE}`);
+    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), mode: ${mediaMode}`);
     
     // Generate thumbnail for images
     let thumbnail = null;
@@ -459,14 +456,11 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
 
     for (const strategy of strategies) {
         try {
-            // In hybrid caption mode, always send media WITHOUT caption first
-            const effectiveCaption = HYBRID_CAPTION_MODE ? null : caption;
-            
             const { content, hasCaption } = await MEDIA_UPLOAD_STRATEGIES[strategy](
-                sock, jid, fileBuffer, mimeType, filename, effectiveCaption, thumbnail
+                sock, jid, fileBuffer, mimeType, filename, caption, thumbnail
             );
 
-            logger.debug(`Attempting to send media with strategy: ${strategy}, hasCaption: ${hasCaption}, jid: ${jid}, hybridCaptionMode: ${HYBRID_CAPTION_MODE}`);
+            logger.debug(`Attempting to send media with strategy: ${strategy}, hasCaption: ${hasCaption}, jid: ${jid}`);
             
             const result = await sock.sendMessage(jid, content);
             assertWhatsAppSendResult(result, jid, `media-${strategy}`);
@@ -474,19 +468,8 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
             
             logger.info(`Media sent successfully via ${strategy} strategy to ${jid}`);
 
-            // Hybrid caption mode: always send caption as separate message after media
-            if (HYBRID_CAPTION_MODE && caption && caption.trim()) {
-                try {
-                    // Small delay to ensure media is delivered first
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    await sendText(sock, targetId, caption);
-                    captionSent = true;
-                    logger.debug('Caption sent as separate text message (hybrid mode)');
-                } catch (captionErr) {
-                    logger.warn(`Failed to send caption as text: ${captionErr.message}`);
-                }
-            } else if (isNewsletter && caption && caption.trim() && !hasCaption) {
-                // For newsletters, if caption wasn't sent with media, send as separate text
+            // For newsletters, if caption wasn't sent with media, send as separate text
+            if (isNewsletter && caption && caption.trim() && !hasCaption) {
                 try {
                     await sendText(sock, targetId, caption);
                     captionSent = true;
