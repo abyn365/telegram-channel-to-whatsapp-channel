@@ -7,7 +7,7 @@ const {
     getContactText,
 } = require('./telegramClient');
 
-const CHANNEL_ORIGIN_EMOJI = {
+const MEDIA_EMOJI = {
     photo: '🖼️',
     video: '🎬',
     audio: '🎵',
@@ -25,7 +25,6 @@ const CHANNEL_ORIGIN_EMOJI = {
 
 function buildCaption(message, channelTitle, prefix, senderInfo) {
     const includeQuote = process.env.INCLUDE_QUOTE !== 'false';
-    
     const mediaType = getMediaType(message);
     const rawText = extractText(message);
     const webUrl = extractWebPageUrl(message);
@@ -33,7 +32,7 @@ function buildCaption(message, channelTitle, prefix, senderInfo) {
 
     if (prefix) parts.push(prefix);
 
-    const emoji = CHANNEL_ORIGIN_EMOJI[mediaType] || '📩';
+    const emoji = MEDIA_EMOJI[mediaType] || '📩';
     if (channelTitle) parts.push(`${emoji} *${channelTitle}*`);
 
     if (rawText) parts.push(rawText);
@@ -48,52 +47,25 @@ function buildCaption(message, channelTitle, prefix, senderInfo) {
 
     if (webUrl) parts.push(`🔗 ${webUrl}`);
 
-    const caption = parts.filter(Boolean).join('\n\n');
+    const body = parts.filter(Boolean).join('\n\n');
 
-    if (!includeQuote) {
-        return caption;
-    }
-    
-    const quoteText = buildQuoteText(channelTitle, senderInfo);
-    
-    if (quoteText) {
-        return `${caption}\n\n${quoteText}`;
-    }
-    
-    return caption;
-}
+    if (!includeQuote) return body;
 
-function buildQuoteText(channelTitle, senderInfo) {
-    if (!channelTitle && !senderInfo?.name && !senderInfo?.phone) {
-        return null;
+    const quoteParts = [];
+    if (channelTitle) quoteParts.push(`Channel: ${channelTitle}`);
+    if (senderInfo?.name) quoteParts.push(`Author: ${senderInfo.name}`);
+
+    if (quoteParts.length > 0) {
+        return `${body}\n\n> ${quoteParts.join(' | ')}`;
     }
 
-    const parts = [];
-    
-    if (channelTitle) {
-        parts.push(`Channel: ${channelTitle}`);
-    }
-    
-    if (senderInfo?.name) {
-        parts.push(`Author: ${senderInfo.name}`);
-    }
-    
-    if (senderInfo?.phone) {
-        parts.push(`Number: ${senderInfo.phone}`);
-    }
-
-    if (parts.length === 0) {
-        return null;
-    }
-
-    return `> ${parts.join(' | ')}`;
+    return body;
 }
 
 function buildPayload(message, filePath, channelTitle, senderInfo) {
     const prefix = process.env.MESSAGE_PREFIX || '';
     const text = buildCaption(message, channelTitle, prefix, senderInfo);
     const mediaType = getMediaType(message);
-
     return { text, filePath, mediaType };
 }
 

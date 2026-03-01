@@ -1,299 +1,26 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
+    DisconnectReason,
+    Browsers,
+} = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs-extra');
 const mime = require('mime-types');
 const path = require('path');
 const logger = require('./logger');
-const { execSync } = require('child_process');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Wait for the WhatsApp Web page to be stable (no ongoing navigation)
- */
-async function waitForPageStable(client, maxWaitMs = 10000) {
-    const startTime = Date.now();
-    const checkInterval = 500;
-    
-    while (Date.now() - startTime < maxWaitMs) {
-        try {
-            const navigationState = await client.pupPage.evaluate(() => {
-                return {
-                    readyState: document.readyState,
-                    url: window.location.href,
-                };
-            });
-            
-            if (navigationState.readyState === 'complete' && 
-                !navigationState.url.includes('loading') &&
-                navigationState.url.includes('web.whatsapp.com')) {
-                await sleep(500);
-                return true;
-            }
-        } catch (e) {
-            // Ignore evaluation errors during stability check
-        }
-        await sleep(checkInterval);
-    }
-    return false;
-}
+let _isConnected = false;
+let _reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
-const resolvedTargets = new Set();
+const SESSION_DIR = path.join(__dirname, '../sessions/baileys');
 
-function extractInviteCode(targetId) {
-    if (!targetId) return null;
-
-    const sanitized = String(targetId).trim().replace(/^['"]+|['"]+$/g, '');
-    if (!sanitized) return null;
-
-    const channelUrlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
-    if (channelUrlMatch) {
-        return channelUrlMatch[1];
-    }
-
-    if (/^[a-zA-Z0-9]{15,}$/.test(sanitized) && !sanitized.includes('@')) {
-        return sanitized;
-    }
-
-    return null;
-}
-
-function findChromeExecutable() {
-    const possiblePaths = [
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/google-chrome',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/snap/bin/chromium',
-        '/usr/bin/chromium-browser-unstable',
-    ];
-
-    for (const chromePath of possiblePaths) {
-        if (fs.existsSync(chromePath)) {
-            logger.info(`Found Chrome executable at: ${chromePath}`);
-            return chromePath;
-        }
-    }
-
-    try {
-        const chromePath = execSync('which google-chrome-stable || which google-chrome || which chromium-browser || which chromium', {
-            encoding: 'utf-8',
-        }).trim();
-        if (chromePath) {
-            logger.info(`Found Chrome executable via which: ${chromePath}`);
-            return chromePath;
-        }
-    } catch (e) {
-        // Ignore
-    }
-
-    logger.warn('Chrome/Chromium executable not found, relying on Puppeteer bundled Chrome');
-    return undefined;
-}
-
-async function createWhatsAppClient() {
-    const executablePath = findChromeExecutable();
-
-    const sessionPath = path.join(__dirname, '../sessions/whatsapp');
-    const sessionFile = path.join(sessionPath, 'session.json');
-    if (await fs.pathExists(sessionFile)) {
-        try {
-            const stats = await fs.stat(sessionFile);
-            const sessionAge = Date.now() - stats.mtimeMs;
-            if (sessionAge > 30 * 24 * 60 * 60 * 1000) {
-                logger.warn('WhatsApp session appears to be older than 30 days and may have expired. If connection fails, try deleting the sessions/whatsapp folder.');
-            } else {
-                logger.info('Found existing WhatsApp session, attempting to reconnect...');
-            }
-        } catch (e) {
-            // Ignore - session file may be corrupted
-        }
-    }
-
-    const client = new Client({
-        authStrategy: new LocalAuth({
-            dataPath: path.join(__dirname, '../sessions/whatsapp'),
-        }),
-        puppeteer: {
-            headless: 'new',
-            executablePath: executablePath,
-            timeout: 120000,
-            protocolTimeout: 180000,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu',
-                '--disable-extensions',
-                '--disable-default-apps',
-                '--disable-translate',
-                '--disable-sync',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding',
-                '--disable-features=IsolateOrigins,site-per-process',
-            ],
-        },
-    });
-
-    await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            reject(new Error('WhatsApp connection timed out after 5 minutes'));
-        }, 300_000);
-
-        let qrGenerated = false;
-        let readyFired = false;
-
-        client.on('loading_screen', (percent, message) => {
-            logger.info(`WhatsApp loading: ${percent}% - ${message || 'connecting...'}`);
-        });
-
-        client.on('authenticated', () => {
-            logger.info('WhatsApp session authenticated successfully');
-        });
-
-        client.on('auth_logged_out', (info) => {
-            logger.warn('WhatsApp auth logged out:', info);
-        });
-
-        client.on('qr', (qr) => {
-            qrGenerated = true;
-            logger.info('WhatsApp QR code generated — scan with your phone:');
-            qrcode.generate(qr, { small: true });
-            logger.info('(If QR code is not scannable, try logging into WhatsApp Web manually at web.whatsapp.com)');
-        });
-
-        client.on('ready', async () => {
-            if (readyFired) return;
-            readyFired = true;
-            clearTimeout(timeout);
-            clearTimeout(timeoutWarning);
-            logger.info('WhatsApp userbot ready.');
-            await sleep(1000);
-            resolve();
-        });
-
-        client.on('auth_failure', (msg) => {
-            clearTimeout(timeout);
-            clearTimeout(timeoutWarning);
-            reject(new Error(`WhatsApp auth failure: ${msg}`));
-        });
-
-        client.on('disconnected', (reason) => {
-            logger.warn(`WhatsApp disconnected: ${reason}`);
-        });
-
-        const timeoutWarning = setTimeout(() => {
-            if (!readyFired) {
-                if (qrGenerated) {
-                    logger.warn('WhatsApp QR code was generated but not scanned within 2 minutes. Please scan now or restart to generate a new QR code.');
-                } else {
-                    logger.warn('WhatsApp is taking longer than 2 minutes to connect. This may indicate a session issue - the saved session may have expired.');
-                }
-            }
-        }, 120_000);
-
-        client.on('error', (error) => {
-            clearTimeout(timeout);
-            clearTimeout(timeoutWarning);
-            logger.error('WhatsApp client error during initialization:', error);
-            if (error.message.includes('TargetCloseError') || error.message.includes('Session closed')) {
-                reject(new Error('Browser closed unexpectedly during initialization. This may be due to resource constraints or Chrome compatibility issues. Try again or check system resources.'));
-            } else {
-                reject(error);
-            }
-        });
-
-        client.initialize().catch((err) => {
-            clearTimeout(timeout);
-            clearTimeout(timeoutWarning);
-            reject(err);
-        });
-    });
-
-    return client;
-}
-
-async function listChats(client, retries = 3) {
-    await waitForPageStable(client);
-    
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            await sleep(2000);
-            await waitForPageStable(client);
-            
-            const chats = await client.getChats();
-            
-            let allItems = chats.map((c) => ({
-                id: c.id._serialized,
-                name: c.name,
-                type: c.isGroup ? 'group' : 'chat',
-            }));
-            
-            // Get channels using the built-in getChannels method
-            try {
-                const channels = await client.getChannels();
-
-                if (channels && channels.length > 0) {
-                    for (const channel of channels) {
-                        const channelId = channel.id._serialized;
-                        if (!allItems.find(c => c.id === channelId)) {
-                            allItems.push({
-                                id: channelId,
-                                name: channel.name || 'WhatsApp Channel',
-                                type: 'channel',
-                            });
-                        }
-                    }
-                }
-            } catch (err) {
-                logger.debug(`Could not get channels: ${err.message}`);
-            }
-
-            // Fallback: inspect WhatsApp Web in-page store for newsletter IDs.
-            const storeChannels = await getChannelCandidatesFromPageStore(client);
-            if (storeChannels.length > 0) {
-                for (const channel of storeChannels) {
-                    if (!allItems.find((c) => c.id === channel.id)) {
-                        allItems.push({
-                            id: channel.id,
-                            name: channel.name || 'WhatsApp Channel',
-                            type: 'channel',
-                        });
-                    }
-                }
-            }
-
-            return allItems;
-        } catch (err) {
-            const errorMessage = err.message || '';
-            const isNavigationError = 
-                errorMessage.includes('Execution context was destroyed') ||
-                errorMessage.includes('navigation') ||
-                errorMessage.includes('TargetCloseError') ||
-                errorMessage.includes('Protocol error') ||
-                errorMessage.includes('Session closed');
-            
-            if (isNavigationError && attempt < retries) {
-                logger.warn(`listChats attempt ${attempt} failed (${errorMessage}), retrying...`);
-                await sleep(3000);
-                continue;
-            }
-            throw err;
-        }
-    }
-}
-
-/**
- * Normalize WhatsApp channel ID from various formats:
- * - https://whatsapp.com/channel/0029Vb7T8V460eBW2gKeNC1x -> 0029Vb7T8V460eBW2gKeNC1x@newsletter
- * - 0029Vb7T8V460eBW2gKeNC1x -> 0029Vb7T8V460eBW2gKeNC1x@newsletter
- * - 0029Vb7T8V460eBW2gKeNC1x@newsletter -> stays the same
- * - regular chat/group ID -> stays the same
- */
 function normalizeWhatsAppId(targetId) {
     if (!targetId) return targetId;
 
@@ -301,14 +28,14 @@ function normalizeWhatsAppId(targetId) {
     if (!sanitized) return sanitized;
 
     if (/@newsletter$/i.test(sanitized)) {
-        return sanitized.replace(/@newsletter$/i, '@newsletter');
+        return sanitized;
     }
 
     if (sanitized.includes('@')) {
         return sanitized;
     }
 
-    const channelUrlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
+    const channelUrlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
     if (channelUrlMatch) {
         return `${channelUrlMatch[1]}@newsletter`;
     }
@@ -317,463 +44,228 @@ function normalizeWhatsAppId(targetId) {
         return `${sanitized}@g.us`;
     }
 
-    if (/^[a-zA-Z0-9]{15,}$/.test(sanitized)) {
+    if (/^[a-zA-Z0-9_-]{15,}$/.test(sanitized) && !sanitized.includes('@')) {
         return `${sanitized}@newsletter`;
     }
 
     return sanitized;
 }
 
-async function resolveChannelTargetId(client, targetId) {
-    const normalizedId = normalizeWhatsAppId(targetId);
+function extractInviteCode(targetId) {
+    if (!targetId) return null;
 
-    if (!/@newsletter$/i.test(normalizedId)) {
-        return normalizedId;
+    const sanitized = String(targetId).trim();
+    const urlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
+    if (urlMatch) return urlMatch[1];
+
+    if (/^[a-zA-Z0-9_-]{15,}$/.test(sanitized) && !sanitized.includes('@')) {
+        return sanitized;
     }
 
-    const inviteCode = extractInviteCode(targetId) || normalizedId.replace(/@newsletter$/i, '');
-
-    try {
-        const channel = await client.getChannelByInviteCode(inviteCode);
-        const resolvedId = channel?.id?._serialized;
-
-        if (resolvedId && /@newsletter$/i.test(resolvedId)) {
-            if (resolvedId !== normalizedId) {
-                logger.info(`Resolved channel invite code ${inviteCode} to WhatsApp channel ID ${resolvedId}`);
-            }
-            return resolvedId;
-        }
-    } catch (err) {
-        logger.debug(`Could not resolve invite code ${inviteCode} to channel ID: ${err.message}`);
+    if (/@newsletter$/i.test(sanitized)) {
+        return sanitized.replace(/@newsletter$/i, '');
     }
 
-    return normalizedId;
+    return null;
 }
 
+async function createWhatsAppClient(onReconnect) {
+    await fs.ensureDir(SESSION_DIR);
 
-async function getChannelCandidatesFromPageStore(client) {
-    try {
-        const candidates = await client.pupPage.evaluate(() => {
-            const ids = new Map();
-            const seen = new Set();
-            const maxDepth = 3;
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    const { version } = await fetchLatestBaileysVersion();
 
-            const safeStringify = (value) => {
-                try {
-                    return JSON.stringify(value || {});
-                } catch (err) {
-                    return '';
-                }
-            };
+    logger.info(`Using Baileys v${version.join('.')} (WebSocket-based, no Chrome required)`);
 
-            const normalizeCandidateId = (value) => {
-                if (!value || typeof value !== 'string') return null;
-                const sanitized = value.trim();
-                if (!sanitized) return null;
+    const sock = makeWASocket({
+        version,
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }),
+        browser: Browsers.ubuntu('TG-WA Forwarder'),
+        connectTimeoutMs: 60_000,
+        keepAliveIntervalMs: 30_000,
+        markOnlineOnConnect: false,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+    });
 
-                if (/@newsletter$/i.test(sanitized)) {
-                    return sanitized.replace(/@newsletter$/i, '@newsletter');
-                }
+    sock.ev.on('creds.update', saveCreds);
 
-                const urlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
-                if (urlMatch) {
-                    return `${urlMatch[1]}@newsletter`;
-                }
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('WhatsApp connection timed out after 5 minutes'));
+        }, 300_000);
 
-                const embedded = sanitized.match(/([a-zA-Z0-9]{15,})@newsletter/i);
-                if (embedded) {
-                    return `${embedded[1]}@newsletter`;
-                }
-
-                if (/^[a-zA-Z0-9]{15,}$/.test(sanitized)) {
-                    return `${sanitized}@newsletter`;
-                }
-
-                return null;
-            };
-
-            const addCandidate = (id, name, source, raw) => {
-                const normalized = normalizeCandidateId(id);
-                if (!normalized) return;
-                if (!ids.has(normalized)) {
-                    ids.set(normalized, {
-                        id: normalized,
-                        name: name || 'WhatsApp Channel',
-                        source,
-                        raw: raw || '',
-                    });
-                }
-            };
-
-            const inspectItem = (item, source) => {
-                if (!item) return;
-
-                if (typeof item === 'string') {
-                    addCandidate(item, null, source, item);
-                    return;
-                }
-
-                if (typeof item !== 'object') return;
-
-                const serialized = item?.id?._serialized || item?.id?.toString?.() || item?.jid?._serialized || item?.jid || item?._serialized;
-                const name = item?.name || item?.formattedTitle || item?.displayName || item?.newsletterMetadata?.name || item?.title;
-                const raw = safeStringify(item);
-
-                addCandidate(serialized, name, source, raw);
-                addCandidate(item?.inviteCode, name, source, raw);
-                addCandidate(item?.newsletterInviteCode, name, source, raw);
-                addCandidate(item?.newsletter?.inviteCode, name, source, raw);
-                addCandidate(item?.newsletter?.id, name, source, raw);
-                addCandidate(item?.newsletterMetadata?.id, name, source, raw);
-            };
-
-            const traverse = (value, source, depth = 0) => {
-                if (!value || depth > maxDepth) return;
-                if (typeof value === 'function') return;
-
-                if (typeof value === 'string') {
-                    addCandidate(value, null, source, value);
-                    return;
-                }
-
-                if (typeof value !== 'object') return;
-
-                if (seen.has(value)) return;
-                seen.add(value);
-
-                inspectItem(value, source);
-
-                if (Array.isArray(value)) {
-                    value.forEach((item) => traverse(item, source, depth + 1));
-                    return;
-                }
-
-                if (value instanceof Map) {
-                    value.forEach((item) => traverse(item, source, depth + 1));
-                }
-
-                if (value instanceof Set) {
-                    value.forEach((item) => traverse(item, source, depth + 1));
-                }
-
-                if (Array.isArray(value.models)) {
-                    traverse(value.models, `${source}.models`, depth + 1);
-                }
-
-                if (Array.isArray(value._models)) {
-                    traverse(value._models, `${source}._models`, depth + 1);
-                }
-
-                if (typeof value.getModels === 'function') {
-                    try {
-                        traverse(value.getModels(), `${source}.getModels`, depth + 1);
-                    } catch (err) {
-                        // ignore
-                    }
-                }
-
-                if (typeof value.toArray === 'function') {
-                    try {
-                        traverse(value.toArray(), `${source}.toArray`, depth + 1);
-                    } catch (err) {
-                        // ignore
-                    }
-                }
-
-                for (const [key, child] of Object.entries(value)) {
-                    if (key === 'models' || key === '_models') continue;
-                    traverse(child, `${source}.${key}`, depth + 1);
-                }
-            };
-
-            const store = window.Store || {};
-            traverse(store.Chat?.models, 'Store.Chat.models');
-
-            for (const [key, value] of Object.entries(store)) {
-                if (!value) continue;
-                const shouldScan = /newsletter|channel|update/i.test(key) || key === 'Chat' || key === 'Contact';
-                if (shouldScan) {
-                    traverse(value, `Store.${key}`);
-                }
+        sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+            if (qr) {
+                logger.info('WhatsApp QR code — scan with your phone:');
+                qrcode.generate(qr, { small: true });
+                logger.info('(Open WhatsApp → Linked Devices → Link a Device → scan QR)');
             }
 
-            return Array.from(ids.values());
+            if (connection === 'open') {
+                clearTimeout(timeout);
+                _isConnected = true;
+                _reconnectAttempts = 0;
+                logger.info('WhatsApp connected successfully via Baileys (WebSocket).');
+                resolve();
+            }
+
+            if (connection === 'close') {
+                _isConnected = false;
+                const statusCode = lastDisconnect?.error instanceof Boom
+                    ? lastDisconnect.error.output?.statusCode
+                    : null;
+                const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+                if (loggedOut) {
+                    clearTimeout(timeout);
+                    logger.error('WhatsApp session logged out. Delete sessions/baileys/ and restart to re-authenticate.');
+                    reject(new Error('WhatsApp logged out'));
+                    return;
+                }
+
+                if (!_isConnected) {
+                    clearTimeout(timeout);
+                    logger.warn(`WhatsApp connection closed during init (code ${statusCode}). Retrying...`);
+                    reject(new Error(`WhatsApp connection closed: ${statusCode}`));
+                    return;
+                }
+
+                logger.warn(`WhatsApp disconnected (code ${statusCode}). Will reconnect...`);
+                if (typeof onReconnect === 'function') {
+                    onReconnect();
+                }
+            }
         });
 
-        return Array.isArray(candidates) ? candidates : [];
-    } catch (err) {
-        logger.debug(`Could not inspect WhatsApp Web store for channels: ${err.message}`);
-        return [];
-    }
+        sock.ev.on('auth-state.update', () => {
+            saveCreds().catch(() => {});
+        });
+    });
+
+    return sock;
 }
 
-async function resolveChannelTargetIdFromPage(client, targetId) {
+async function createWhatsAppClientWithReconnect() {
+    let sock = null;
+    let resolveReady;
+    let rejectReady;
+    const readyPromise = new Promise((res, rej) => {
+        resolveReady = res;
+        rejectReady = rej;
+    });
+
+    const connect = async () => {
+        try {
+            sock = await createWhatsAppClient(async () => {
+                _reconnectAttempts++;
+                if (_reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+                    logger.error(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Exiting.`);
+                    process.exit(1);
+                }
+                const delay = Math.min(1000 * Math.pow(2, _reconnectAttempts), 60_000);
+                logger.info(`Reconnecting WhatsApp in ${delay / 1000}s (attempt ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+                await sleep(delay);
+                await connect();
+            });
+            resolveReady(sock);
+        } catch (err) {
+            rejectReady(err);
+        }
+    };
+
+    await connect();
+    return readyPromise;
+}
+
+async function resolveNewsletterJid(sock, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
     if (!/@newsletter$/i.test(normalizedId)) return normalizedId;
 
-    const inviteCode = extractInviteCode(targetId) || normalizedId.replace(/@newsletter$/i, '');
+    const inviteCode = extractInviteCode(targetId);
+    if (!inviteCode) return normalizedId;
 
     try {
-        await client.pupPage.goto(`https://web.whatsapp.com/channel/${inviteCode}`, {
-            waitUntil: 'networkidle2',
-            timeout: 45000,
-        });
-        await sleep(2500);
-    } catch (err) {
-        logger.debug(`Could not navigate to channel page ${inviteCode}: ${err.message}`);
-    }
-
-    const candidates = await getChannelCandidatesFromPageStore(client);
-    if (!candidates.length) return normalizedId;
-
-    const match = candidates.find((c) => c.raw && c.raw.includes(inviteCode));
-    if (match?.id) {
-        if (match.id !== normalizedId) {
-            logger.info(`Resolved channel via WhatsApp Web store: ${match.id} (invite code ${inviteCode})`);
+        const metadata = await sock.newsletterMetadata('invite', inviteCode);
+        if (metadata?.id) {
+            const jid = metadata.id.includes('@newsletter') ? metadata.id : `${metadata.id}@newsletter`;
+            logger.info(`Resolved newsletter "${metadata.name || inviteCode}" → ${jid}`);
+            return jid;
         }
-        return match.id;
-    }
-
-    const fallback = candidates[0];
-    if (fallback?.id) {
-        logger.warn(`Could not map invite code ${inviteCode} exactly; using discovered channel ID ${fallback.id} from ${fallback.source}`);
-        return fallback.id;
+    } catch (err) {
+        logger.debug(`Could not resolve newsletter invite code ${inviteCode}: ${err.message}`);
     }
 
     return normalizedId;
 }
 
-async function ensureTargetAvailable(client, targetId) {
-    if (!targetId || resolvedTargets.has(targetId)) return;
-
-    let lastError;
-
-    // For regular chats and groups, try getChatById
-    if (!/@newsletter$/i.test(targetId)) {
-        try {
-            const chat = await client.getChatById(targetId);
-            if (chat) {
-                resolvedTargets.add(targetId);
-                return;
-            }
-        } catch (err) {
-            lastError = err;
-        }
-    }
-
-    // For newsletters/channels, use built-in methods
-    if (/@newsletter$/i.test(targetId)) {
-        const inviteCode = targetId.replace(/@newsletter$/i, '');
-        
-        // First, check if we already have access to this channel
-        try {
-            const channels = await client.getChannels();
-            const found = channels && channels.find(c => c.id._serialized === targetId);
-            
-            if (found) {
-                logger.info(`Found WhatsApp channel "${found.name}" (${inviteCode}) in your channels`);
-                resolvedTargets.add(targetId);
-                return;
-            }
-        } catch (err) {
-            logger.debug(`getChannels check failed: ${err.message}`);
-        }
-        
-        // Try to get channel by invite code and ensure it's loaded
-        try {
-            const channel = await client.getChannelByInviteCode(inviteCode);
-            if (channel) {
-                logger.info(`WhatsApp channel ${inviteCode} found via invite code: ${channel.name || 'Unknown'}`);
-                
-                // Check if we need to subscribe (required for sending)
-                try {
-                    const success = await client.subscribeToChannel(targetId);
-                    if (success) {
-                        logger.info(`Successfully subscribed to WhatsApp channel: ${inviteCode}`);
-                    }
-                } catch (subErr) {
-                    // Might already be subscribed, that's fine
-                    logger.debug(`Subscribe attempt: ${subErr.message}`);
-                }
-                
-                // Wait a moment for the subscription to take effect
-                await sleep(2000);
-                
-                resolvedTargets.add(targetId);
-                return;
-            }
-        } catch (err) {
-            lastError = err;
-            logger.debug(`getChannelByInviteCode failed: ${err.message}`);
-        }
-        
-        // Try to subscribe directly
-        try {
-            const success = await client.subscribeToChannel(targetId);
-            if (success) {
-                logger.info(`Successfully subscribed to WhatsApp channel: ${inviteCode}`);
-                await sleep(2000);
-                resolvedTargets.add(targetId);
-                return;
-            }
-        } catch (err) {
-            logger.debug(`Direct subscribe failed: ${err.message}`);
-        }
-        
-        // Still add to resolved targets - the send might work if user has access
-        logger.warn(`Could not verify WhatsApp channel ${inviteCode}, but will attempt to send anyway.`);
-        resolvedTargets.add(targetId);
-        return;
-    }
-
-    const message = `WhatsApp target ID "${targetId}" could not be resolved. Make sure it matches a chat, group, or channel you can post to.`;
-    const error = new Error(message);
-    if (lastError) {
-        error.cause = lastError;
-    }
-    throw error;
-}
-
-function shouldRetrySend(err) {
-    const message = err?.message || '';
-    return message.includes('Execution context was destroyed') || message.includes('t: t');
-}
-
-/**
- * Pre-load a channel to ensure it's available in the WhatsApp Web session
- */
-async function preloadChannel(client, channelId) {
-    const inviteCode = channelId.replace(/@newsletter$/i, '');
-    
-    try {
-        // Try to get channel metadata first
-        const channel = await client.getChannelByInviteCode(inviteCode);
-        if (channel) {
-            logger.debug(`Pre-loaded channel: ${channel.name || inviteCode}`);
-            
-            // Ensure we're subscribed
-            try {
-                await client.subscribeToChannel(channelId);
-                logger.debug(`Subscription confirmed for ${inviteCode}`);
-            } catch (subErr) {
-                // May already be subscribed
-                logger.debug(`Subscription check: ${subErr.message}`);
-            }
-            
-            return true;
-        }
-    } catch (err) {
-        logger.warn(`Could not pre-load channel ${inviteCode}: ${err.message}`);
-    }
-    
-    // Try alternative approach: navigate to the channel in WhatsApp Web
-    try {
-        logger.info(`Attempting to load channel via navigation: ${inviteCode}`);
-        await client.pupPage.goto(`https://web.whatsapp.com/channel/${inviteCode}`, {
-            waitUntil: 'networkidle2',
-            timeout: 30000
-        });
-        await sleep(3000);
-        
-        // Verify the channel loaded
-        const channelUrl = client.pupPage.url();
-        if (channelUrl.includes(inviteCode) || channelUrl.includes('channel')) {
-            logger.info(`Successfully navigated to channel in WhatsApp Web`);
-            
-            // Try to subscribe again
-            try {
-                await client.subscribeToChannel(channelId);
-            } catch (subErr) {
-                logger.debug(`Post-navigation subscribe: ${subErr.message}`);
-            }
-            
-            return true;
-        }
-    } catch (navErr) {
-        logger.warn(`Navigation approach failed: ${navErr.message}`);
-    }
-    
-    return false;
-}
-
-async function sendWithRetry(client, targetId, content, options) {
-    let normalizedId = await resolveChannelTargetId(client, targetId);
-
-    if (normalizedId.includes('@newsletter')) {
-        normalizedId = await resolveChannelTargetIdFromPage(client, normalizedId);
-    }
-    
-    // For channels, try to pre-load before ensuring target
-    if (normalizedId.includes('@newsletter')) {
-        await preloadChannel(client, normalizedId);
-        await sleep(1000);
-    }
-    
-    await ensureTargetAvailable(client, normalizedId);
-
-    try {
-        return await client.sendMessage(normalizedId, content, options);
-    } catch (err) {
-        const errMsg = err?.message || '';
-        
-        // Handle specific channel errors
-        if (errMsg.includes('t: t') || errMsg.includes('Evaluation failed')) {
-            const inviteCode = normalizedId.replace('@newsletter', '');
-            logger.error('');
-            logger.error('=== CHANNEL SEND ERROR ===');
-            logger.error(`Channel ID: ${inviteCode}`);
-            logger.error('This error usually means the channel is not properly followed/loaded.');
-            logger.error('');
-            logger.error('TO FIX THIS ISSUE:');
-            logger.error('');
-            logger.error('Option 1 - Follow via command line:');
-            logger.error(`  npm run follow-channel https://whatsapp.com/channel/${inviteCode}`);
-            logger.error('');
-            logger.error('Option 2 - Follow manually in WhatsApp:');
-            logger.error('  1. Open WhatsApp on your phone');
-            logger.error('  2. Go to Updates tab → Channels');
-            logger.error('  3. Search for your channel and tap "Follow"');
-            logger.error('  4. Restart the forwarder');
-            logger.error('');
-            logger.error('IMPORTANT: Even as a channel admin/owner, you must "Follow"');
-            logger.error('your own channel for the WhatsApp Web session to see and post to it.');
-            logger.error('');
-            throw new Error(`Failed to send to WhatsApp channel. Channel not properly followed. Run: npm run follow-channel https://whatsapp.com/channel/${inviteCode}`);
-        }
-        
-        if (!shouldRetrySend(err)) {
-            throw err;
-        }
-        logger.warn(`WhatsApp send failed (${errMsg}). Retrying once...`);
-        resolvedTargets.delete(normalizedId);
-        await preloadChannel(client, normalizedId);
-        await sleep(2000);
-        await ensureTargetAvailable(client, normalizedId);
-        return client.sendMessage(normalizedId, content, options);
-    }
-}
-
-async function sendText(client, targetId, text) {
+async function sendText(sock, targetId, text) {
     if (!text || !text.trim()) return;
-    await sendWithRetry(client, targetId, text);
+    const jid = await resolveNewsletterJid(sock, targetId);
+    await sock.sendMessage(jid, { text });
 }
 
-async function sendMediaFile(client, targetId, filePath, caption) {
+async function sendMediaFile(sock, targetId, filePath, caption) {
+    const jid = await resolveNewsletterJid(sock, targetId);
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
-    const data = await fs.readFile(filePath);
-    const base64 = data.toString('base64');
+    const fileBuffer = await fs.readFile(filePath);
     const filename = path.basename(filePath);
-    const media = new MessageMedia(mimeType, base64, filename);
-    await sendWithRetry(client, targetId, media, { caption: caption || '' });
+
+    let messageContent;
+
+    if (mimeType.startsWith('image/') && mimeType !== 'image/gif') {
+        messageContent = {
+            image: fileBuffer,
+            caption: caption || '',
+            mimetype: mimeType,
+        };
+    } else if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
+        messageContent = {
+            video: fileBuffer,
+            caption: caption || '',
+            mimetype: mimeType.startsWith('image/') ? 'video/mp4' : mimeType,
+            gifPlayback: mimeType === 'image/gif',
+        };
+    } else if (mimeType.startsWith('audio/')) {
+        const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
+        messageContent = {
+            audio: fileBuffer,
+            mimetype: mimeType,
+            ptt: isPtt,
+        };
+    } else {
+        messageContent = {
+            document: fileBuffer,
+            mimetype: mimeType,
+            fileName: filename,
+            caption: caption || '',
+        };
+    }
+
+    await sock.sendMessage(jid, messageContent);
 }
 
-async function sendMessage(client, targetId, payload) {
+async function sendStickerFile(sock, targetId, filePath) {
+    const jid = await resolveNewsletterJid(sock, targetId);
+    const fileBuffer = await fs.readFile(filePath);
+    await sock.sendMessage(jid, {
+        sticker: fileBuffer,
+        mimetype: 'image/webp',
+    });
+}
+
+async function sendMessage(sock, targetId, payload) {
     const { text, filePath, mediaType } = payload;
 
     if (filePath && (await fs.pathExists(filePath))) {
         try {
-            const captionText = text || '';
-            await sendMediaFile(client, targetId, filePath, captionText);
+            if (mediaType === 'sticker') {
+                await sendStickerFile(sock, targetId, filePath);
+            } else {
+                await sendMediaFile(sock, targetId, filePath, text || '');
+            }
         } finally {
             await fs.remove(filePath).catch(() => {});
         }
@@ -781,17 +273,66 @@ async function sendMessage(client, targetId, payload) {
     }
 
     if (text && text.trim()) {
-        await sendText(client, targetId, text);
+        await sendText(sock, targetId, text);
     }
 }
 
+async function listChats(sock) {
+    const chats = [];
+
+    try {
+        const groups = await sock.groupFetchAllParticipating();
+        for (const [jid, meta] of Object.entries(groups)) {
+            chats.push({ id: jid, name: meta.subject || 'Unknown Group', type: 'group' });
+        }
+    } catch (err) {
+        logger.debug(`Could not fetch groups: ${err.message}`);
+    }
+
+    logger.info('Note: WhatsApp channels (newsletters) must be queried by their invite code or JID directly.');
+    logger.info('Use WHATSAPP_TARGET_ID with a channel URL or code, e.g. https://whatsapp.com/channel/xxxx');
+
+    return chats;
+}
+
+async function checkNewsletterAccess(sock, targetId) {
+    const normalizedId = normalizeWhatsAppId(targetId);
+    const inviteCode = extractInviteCode(targetId);
+
+    if (!/@newsletter$/i.test(normalizedId)) {
+        logger.info(`WhatsApp target is a group/chat: ${normalizedId}`);
+        return true;
+    }
+
+    if (!inviteCode) {
+        logger.warn(`Cannot verify newsletter — no invite code found in: ${targetId}`);
+        return false;
+    }
+
+    try {
+        const metadata = await sock.newsletterMetadata('invite', inviteCode);
+        if (metadata) {
+            logger.info(`WhatsApp newsletter verified: "${metadata.name || inviteCode}" (${inviteCode})`);
+            logger.info(`  Subscribers: ${metadata.subscriberCount || 'unknown'}`);
+            logger.info(`  Newsletter JID: ${metadata.id}`);
+            return true;
+        }
+    } catch (err) {
+        logger.warn(`Could not verify newsletter ${inviteCode}: ${err.message}`);
+        logger.warn('Make sure WHATSAPP_TARGET_ID is correct and your account has access to post.');
+    }
+
+    return false;
+}
+
 module.exports = {
-    createWhatsAppClient,
-    listChats,
+    createWhatsAppClientWithReconnect,
     sendMessage,
+    sendText,
+    sendMediaFile,
+    listChats,
     normalizeWhatsAppId,
-    resolveChannelTargetId,
-    resolveChannelTargetIdFromPage,
-    getChannelCandidatesFromPageStore,
     extractInviteCode,
+    resolveNewsletterJid,
+    checkNewsletterAccess,
 };
