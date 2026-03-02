@@ -18,16 +18,107 @@ import { shutdown as shutdownForwardedStore } from './forwardedStore.js';
 // Health check interval
 const HEALTH_CHECK_INTERVAL = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS, 10) || 60000;
 
+// Validate required environment variables
+function validateEnvironment() {
+    const errors = [];
+    const warnings = [];
+    
+    // Required variables
+    const required = [
+        { key: 'TELEGRAM_API_ID', validate: (v) => !isNaN(parseInt(v)) || 'Must be a number' },
+        { key: 'TELEGRAM_API_HASH', validate: (v) => (v && v.length === 32) || 'Must be 32 characters' },
+        { key: 'TELEGRAM_PHONE', validate: (v) => (v && v.startsWith('+')) || 'Must start with +' },
+        { key: 'TELEGRAM_CHANNELS', validate: (v) => (v && v.trim()) || 'Must not be empty' },
+        { key: 'WHATSAPP_TARGET_ID', validate: (v) => (v && v.trim()) || 'Must not be empty' },
+    ];
+    
+    for (const { key, validate } of required) {
+        const value = process.env[key];
+        if (!value) {
+            errors.push(`${key} is required but not set`);
+        } else {
+            const validationResult = validate(value);
+            if (validationResult !== true) {
+                errors.push(`${key}: ${validationResult}`);
+            }
+        }
+    }
+    
+    // Optional but recommended
+    if (!process.env.NEWSLETTER_MEDIA_MODE) {
+        warnings.push('NEWSLETTER_MEDIA_MODE not set, using default "hybrid"');
+    }
+    
+    if (!process.env.MAX_FILE_SIZE_MB) {
+        warnings.push('MAX_FILE_SIZE_MB not set, using default 50 MB');
+    }
+    
+    // Validate numeric ranges
+    const numericConfigs = [
+        { key: 'SEND_DELAY_MS', min: 500, max: 10000, default: 1500 },
+        { key: 'MAX_RETRIES', min: 1, max: 10, default: 3 },
+        { key: 'MAX_FILE_SIZE_MB', min: 1, max: 100, default: 50 },
+        { key: 'HEALTH_CHECK_INTERVAL_MS', min: 10000, max: 600000, default: 60000 },
+    ];
+    
+    for (const { key, min, max, default: defaultVal } of numericConfigs) {
+        const val = parseInt(process.env[key], 10);
+        if (process.env[key] && (isNaN(val) || val < min || val > max)) {
+            warnings.push(`${key} should be between ${min} and ${max}, using default ${defaultVal}`);
+        }
+    }
+    
+    // Log warnings
+    if (warnings.length > 0) {
+        logger.warn('Configuration warnings:');
+        warnings.forEach(w => logger.warn(`  - ${w}`));
+    }
+    
+    // Throw on errors
+    if (errors.length > 0) {
+        logger.error('Configuration errors:');
+        errors.forEach(e => logger.error(`  - ${e}`));
+        throw new Error(`Invalid configuration: ${errors.join('; ')}`);
+    }
+    
+    logger.info('Configuration validated successfully');
+    return true;
+}
+
+// Log startup configuration
+function logStartupConfig() {
+    const config = {
+        'Node.js': process.version,
+        'Platform': `${process.platform} ${process.arch}`,
+        'DDL Mode': process.env.WHATSAPP_DDL_MODE || 'false',
+        'Media Mode': process.env.NEWSLETTER_MEDIA_MODE || 'hybrid',
+        'Send Delay': `${process.env.SEND_DELAY_MS || 1500}ms`,
+        'Max Retries': process.env.MAX_RETRIES || 3,
+        'Max File Size': `${process.env.MAX_FILE_SIZE_MB || 50}MB`,
+        'Translation': process.env.TRANSLATE_TO_ID !== 'false' ? 'enabled' : 'disabled',
+        'Health Check Interval': `${process.env.HEALTH_CHECK_INTERVAL_MS || 60000}ms`,
+        'Log Level': process.env.LOG_LEVEL || 'info',
+    };
+    
+    logger.info('='.repeat(60));
+    logger.info('Telegram → WhatsApp Forwarder Starting');
+    logger.info('='.repeat(60));
+    
+    for (const [key, value] of Object.entries(config)) {
+        logger.info(`  ${key}: ${value}`);
+    }
+    
+    logger.info('='.repeat(60));
+}
+
 async function main() {
-    logger.info('Starting Telegram → WhatsApp forwarder (powered by Baileys — no Chrome needed)...');
-    logger.info(`Node.js version: ${process.version}`);
-    logger.info(`Platform: ${process.platform} ${process.arch}`);
+    logStartupConfig();
+    
+    // Validate environment before starting
+    validateEnvironment();
 
     const rawChannels = process.env.TELEGRAM_CHANNELS;
-    if (!rawChannels) throw new Error('TELEGRAM_CHANNELS is not set in .env');
-
     const targetId = process.env.WHATSAPP_TARGET_ID;
-    if (!targetId) throw new Error('WHATSAPP_TARGET_ID is not set in .env');
 
     const channels = resolveChannelTargets(rawChannels);
 
@@ -85,6 +176,7 @@ async function main() {
     const stopPolling = startPollingChannels(telegramClient, channelEntities, handleIncomingMessage);
 
     logger.info('Forwarder is running. Waiting for new messages...');
+    logger.info('Press Ctrl+C to stop.');
 
     // Health check interval
     const healthCheckTimer = setInterval(async () => {
@@ -92,7 +184,13 @@ async function main() {
         const waHealthy = await isConnectionHealthy(whatsappSock);
         const queueStats = getQueueStats();
 
-        logger.info(`Health check: Telegram=${tgConnected ? 'OK' : 'DISCONNECTED'}, WhatsApp=${waHealthy ? 'OK' : 'UNHEALTHY'}, Queue=${queueStats.pending} pending, ${queueStats.processed} processed, ${queueStats.failed} failed`);
+        const status = `Telegram=${tgConnected ? 'OK' : 'DISCONNECTED'}, WhatsApp=${waHealthy ? 'OK' : 'UNHEALTHY'}, Queue=${queueStats.pending} pending, ${queueStats.processed} processed, ${queueStats.failed} failed`;
+        
+        if (!tgConnected || !waHealthy) {
+            logger.warn(`Health check: ${status}`);
+        } else {
+            logger.info(`Health check: ${status}`);
+        }
 
         if (!waHealthy) {
             logger.warn('WhatsApp connection appears unhealthy. Monitor for reconnection.');

@@ -24,6 +24,12 @@ const SESSION_DIR = path.join(__dirname, '../sessions/baileys');
 // Cache for resolved newsletter JIDs
 const newsletterJidCache = new Map();
 
+// Media types that WhatsApp channels/newsletters support
+const NEWSLETTER_SUPPORTED_MEDIA = new Set([
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'video/mp4', 'video/3gpp', 'video/quicktime', 'video/webm',
+]);
+
 function normalizeWhatsAppId(targetId) {
     if (!targetId) return targetId;
 
@@ -72,29 +78,33 @@ function extractInviteCode(targetId) {
     return null;
 }
 
-async function generateThumbnail(filePath, mimeType) {
+// Check if media type is supported by WhatsApp newsletters
+function isNewsletterSupportedMedia(mimeType) {
+    if (!mimeType) return false;
+    const normalized = mimeType.toLowerCase();
+    
+    // Images
+    if (normalized.startsWith('image/')) return true;
+    // Videos
+    if (normalized.startsWith('video/')) return true;
+    
+    return false;
+}
+
+async function generateThumbnail(buffer, mimeType) {
     try {
-        if (!mimeType.startsWith('image/') && !mimeType.startsWith('video/')) {
+        if (!mimeType?.startsWith('image/')) {
             return null;
         }
 
-        const buffer = await fs.readFile(filePath);
-        let thumbnailBuffer;
-
-        if (mimeType.startsWith('image/')) {
-            // Generate thumbnail for images
-            thumbnailBuffer = await sharp(buffer)
-                .resize(200, 200, { fit: 'inside', withoutEnlargement: true })
-                .jpeg({ quality: 50 })
-                .toBuffer();
-        } else {
-            // For videos, we'd need ffmpeg - skip for now
-            return null;
-        }
+        const thumbnailBuffer = await sharp(buffer)
+            .resize(100, 100, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 40 })
+            .toBuffer();
 
         return thumbnailBuffer;
     } catch (err) {
-        logger.debug(`Could not generate thumbnail for ${filePath}: ${err.message}`);
+        logger.debug(`Could not generate thumbnail: ${err.message}`);
         return null;
     }
 }
@@ -277,42 +287,10 @@ async function resolveNewsletterJid(sock, targetId) {
     return normalizedId;
 }
 
-
-// Helper function to wait for message acknowledgment
-async function waitForAck(sock, messageId, jid, timeoutMs = 5000) {
-    return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-            resolve(false);
-        }, timeoutMs);
-
-        // Listen for message ack
-        const handler = (update) => {
-            const msgKey = update.key?.id;
-            const remoteJid = update.key?.remoteJid;
-            
-            if (msgKey === messageKey || (remoteJid === jid && update.update?.receipt)) {
-                // Check for final status
-                const receipt = update.update?.receipt;
-                if (receipt === 'read' || receipt === 'played' || update.update?.status === 'read') {
-                    clearTimeout(timeout);
-                    sock.ev.off('messages.update', handler);
-                    resolve(true);
-                }
-            }
-        };
-        
-        sock.ev.on('messages.update', handler);
-    });
-}
-
-// Helper to get message key prefix for matching
-let messageKey = '';
-
 function assertWhatsAppSendResult(result, jid, contextLabel) {
     const messageId = result?.key?.id || result?.key?.remoteJid || result?.status;
-    messageKey = messageId; // Store for ack checking
     
-    if (!messageId) {
+    if (!messageId && !result) {
         throw new Error(`WhatsApp returned an empty send result for ${contextLabel} -> ${jid}`);
     }
     
@@ -324,9 +302,9 @@ function assertWhatsAppSendResult(result, jid, contextLabel) {
     
     // For newsletters, log extra info
     if (/@newsletter$/i.test(jid)) {
-        logger.debug(`Newsletter message sent: ${messageId} (${contextLabel}), status: ${status}, remoteJid: ${result?.key?.remoteJid}`);
+        logger.info(`Newsletter message sent successfully: ${messageId || 'pending'} (${contextLabel})`);
     } else {
-        logger.debug(`WhatsApp message sent: ${messageId} (${contextLabel}), status: ${status}`);
+        logger.debug(`WhatsApp message sent: ${messageId || 'pending'} (${contextLabel})`);
     }
 }
 
@@ -337,82 +315,112 @@ async function sendText(sock, targetId, text) {
     assertWhatsAppSendResult(result, jid, 'text');
 }
 
-// Media upload options for different scenarios
-const MEDIA_UPLOAD_STRATEGIES = {
-    // Native media - best for in-app viewing
-    native: async (sock, jid, fileBuffer, mimeType, filename, caption, thumbnail) => {
-        const isNewsletter = /@newsletter$/i.test(jid);
-        
-        if (mimeType.startsWith('image/') && mimeType !== 'image/gif') {
-            const messageContent = {
-                image: fileBuffer,
-                mimetype: mimeType,
-                caption: caption || undefined,
-            };
-            // For newsletters, use stream upload if possible
-            if (isNewsletter) {
-                // Try without caption first for newsletters (caption support varies)
-                const contentWithoutCaption = { image: fileBuffer, mimetype: mimeType };
-                return { content: contentWithoutCaption, hasCaption: false };
-            }
-            return { content: messageContent, hasCaption: !!caption };
-        }
+// Send image or video to newsletter
+async function sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption) {
+    const isImage = mimeType.startsWith('image/');
+    const isGif = mimeType === 'image/gif';
+    const isVideo = mimeType.startsWith('video/') || isGif;
+    
+    logger.info(`Sending ${isImage ? 'image' : 'video'} to newsletter ${jid} (${mimeType})`);
+    
+    // Generate thumbnail for images
+    let thumbnail = null;
+    if (isImage && !isGif) {
+        thumbnail = await generateThumbnail(fileBuffer, mimeType);
+    }
 
-        if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
-            const messageContent = {
-                video: fileBuffer,
-                mimetype: mimeType === 'image/gif' ? 'video/mp4' : mimeType,
-                gifPlayback: mimeType === 'image/gif',
-                caption: caption || undefined,
-            };
-            if (isNewsletter) {
-                const contentWithoutCaption = {
-                    video: fileBuffer,
-                    mimetype: mimeType === 'image/gif' ? 'video/mp4' : mimeType,
-                    gifPlayback: mimeType === 'image/gif',
-                };
-                return { content: contentWithoutCaption, hasCaption: false };
-            }
-            return { content: messageContent, hasCaption: !!caption };
-        }
-
-        if (mimeType.startsWith('audio/')) {
-            const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
-            return {
-                content: {
-                    audio: fileBuffer,
-                    mimetype: mimeType,
-                    ptt: isPtt,
-                },
-                hasCaption: false,
-            };
-        }
-
-        // Documents for other file types
-        return {
-            content: {
-                document: fileBuffer,
-                mimetype: mimeType,
-                fileName: filename,
-                caption: caption || undefined,
-            },
-            hasCaption: !!caption,
+    let messageContent;
+    
+    if (isImage && !isGif) {
+        messageContent = {
+            image: fileBuffer,
+            mimetype: mimeType,
+            jpegThumbnail: thumbnail,
         };
-    },
-
-    // Document mode - always sends as downloadable file
-    document: async (sock, jid, fileBuffer, mimeType, filename, caption) => {
-        return {
-            content: {
-                document: fileBuffer,
-                mimetype: mimeType,
-                fileName: filename,
-                caption: caption || undefined,
-            },
-            hasCaption: !!caption,
+    } else {
+        // Video or GIF
+        messageContent = {
+            video: fileBuffer,
+            mimetype: isGif ? 'video/mp4' : mimeType,
+            gifPlayback: isGif,
+            jpegThumbnail: thumbnail,
         };
-    },
-};
+    }
+
+    // Send media
+    const result = await sock.sendMessage(jid, messageContent);
+    assertWhatsAppSendResult(result, jid, isImage ? 'image' : 'video');
+    
+    // For newsletters, send caption as separate message
+    let captionSent = false;
+    if (caption && caption.trim()) {
+        try {
+            await sendText(sock, jid, caption);
+            captionSent = true;
+            logger.debug('Caption sent as separate text message to newsletter');
+        } catch (captionErr) {
+            logger.warn(`Failed to send caption to newsletter: ${captionErr.message}`);
+        }
+    }
+    
+    return { success: true, captionSent, strategy: 'newsletter-media' };
+}
+
+// Send media to regular chat (supports all types including documents and audio)
+async function sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, caption) {
+    logger.info(`Sending media to chat ${jid}: ${filename} (${mimeType})`);
+    
+    const isImage = mimeType.startsWith('image/');
+    const isGif = mimeType === 'image/gif';
+    const isVideo = mimeType.startsWith('video/') || isGif;
+    const isAudio = mimeType.startsWith('audio/');
+    
+    // Generate thumbnail for images
+    let thumbnail = null;
+    if (isImage) {
+        thumbnail = await generateThumbnail(fileBuffer, mimeType);
+    }
+
+    let messageContent;
+    
+    if (isImage && !isGif) {
+        messageContent = {
+            image: fileBuffer,
+            mimetype: mimeType,
+            caption: caption || undefined,
+            jpegThumbnail: thumbnail,
+        };
+    } else if (isVideo) {
+        messageContent = {
+            video: fileBuffer,
+            mimetype: isGif ? 'video/mp4' : mimeType,
+            gifPlayback: isGif,
+            caption: caption || undefined,
+            jpegThumbnail: thumbnail,
+        };
+    } else if (isAudio) {
+        const isPtt = mimeType === 'audio/ogg' || mimeType === 'audio/oga';
+        messageContent = {
+            audio: fileBuffer,
+            mimetype: mimeType,
+            ptt: isPtt,
+        };
+    } else {
+        // Document for other file types
+        messageContent = {
+            document: fileBuffer,
+            mimetype: mimeType,
+            fileName: filename,
+            caption: caption || undefined,
+            jpegThumbnail: thumbnail,
+        };
+    }
+
+    const result = await sock.sendMessage(jid, messageContent);
+    assertWhatsAppSendResult(result, jid, 'chat-media');
+    
+    return { success: true, captionSent: !!caption, strategy: 'chat-native' };
+}
 
 async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     const jid = await resolveNewsletterJid(sock, targetId);
@@ -421,119 +429,82 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     const filename = path.basename(filePath);
     const fileBuffer = await fs.readFile(filePath);
     
-    // Determine media mode
-    const mediaMode = (process.env.NEWSLETTER_MEDIA_MODE || 'hybrid').trim().toLowerCase();
-    
-    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), mode: ${mediaMode}`);
-    
-    // Generate thumbnail for images
-    let thumbnail = null;
-    if (mimeType.startsWith('image/')) {
-        thumbnail = await generateThumbnail(filePath, mimeType);
-    }
+    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), size: ${(fileBuffer.length / 1024).toFixed(2)} KB`);
 
-    // Strategy: Try native first, then fallback to document based on mode
-    const strategies = [];
-    
+    // For newsletters, check if media type is supported
     if (isNewsletter) {
-        if (mediaMode === 'document') {
-            strategies.push('document');
-        } else if (mediaMode === 'native') {
-            strategies.push('native');
-        } else {
-            // hybrid - try native first, then fallback to document
-            strategies.push('native');
-            strategies.push('document');
+        if (!isNewsletterSupportedMedia(mimeType)) {
+            logger.warn(`Media type "${mimeType}" is not supported by WhatsApp newsletters. Only images and videos are accepted.`);
+            logger.info(`Sending caption as text message instead for: ${filename}`);
+            
+            // Send just the caption as text (with a note about the unsupported media)
+            if (caption && caption.trim()) {
+                const unsupportedText = `[Media not supported: ${filename}]\n\n${caption}`;
+                await sendText(sock, jid, unsupportedText);
+                return { success: true, captionSent: true, strategy: 'text-only', mediaSkipped: true };
+            } else {
+                await sendText(sock, jid, `[Media not supported: ${filename}]`);
+                return { success: true, captionSent: false, strategy: 'text-only', mediaSkipped: true };
+            }
         }
-    } else {
-        // For regular chats, always use native
-        strategies.push('native');
-    }
 
-    let lastError = null;
-    let mediaSent = false;
-    let captionSent = false;
-
-    for (const strategy of strategies) {
+        // Send image or video to newsletter
         try {
-            const { content, hasCaption } = await MEDIA_UPLOAD_STRATEGIES[strategy](
-                sock, jid, fileBuffer, mimeType, filename, caption, thumbnail
-            );
-
-            logger.debug(`Attempting to send media with strategy: ${strategy}, hasCaption: ${hasCaption}, jid: ${jid}`);
-            
-            const result = await sock.sendMessage(jid, content);
-            assertWhatsAppSendResult(result, jid, `media-${strategy}`);
-            mediaSent = true;
-            
-            logger.info(`Media sent successfully via ${strategy} strategy to ${jid}`);
-
-            // For newsletters, if caption wasn't sent with media, send as separate text
-            if (isNewsletter && caption && caption.trim() && !hasCaption) {
-                try {
-                    await sendText(sock, targetId, caption);
-                    captionSent = true;
-                    logger.debug('Caption sent as separate text message');
-                } catch (captionErr) {
-                    logger.warn(`Failed to send caption as text: ${captionErr.message}`);
-                }
-            } else if (hasCaption) {
-                captionSent = true;
-            }
-
-            return { success: true, mediaSent, captionSent, strategy };
+            return await sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption);
         } catch (err) {
-            lastError = err;
-            logger.warn(`Strategy ${strategy} failed: ${err.message}`);
-            if (err.stack) {
-                logger.debug(`Stack trace: ${err.stack}`);
-            }
-            
-            // If media was sent but caption failed, try sending caption separately
-            if (mediaSent && caption && caption.trim() && !captionSent) {
-                try {
-                    await sendText(sock, targetId, caption);
-                    captionSent = true;
-                    logger.debug('Caption sent as separate text after media');
-                } catch (captionErr) {
-                    logger.warn(`Failed to send caption as text: ${captionErr.message}`);
-                }
-            }
-            
-            // Only try next strategy if media wasn't sent
-            if (mediaSent) {
-                return { success: true, mediaSent, captionSent, strategy };
-            }
+            logger.error(`Failed to send media to newsletter: ${err.message}`);
+            throw err;
         }
     }
 
-    // All strategies failed
-    logger.error(`All media sending strategies failed. Last error: ${lastError?.message}`);
-    throw lastError || new Error('Failed to send media after all attempts');
+    // For regular chats, use standard approach (supports all media types)
+    try {
+        return await sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, caption);
+    } catch (err) {
+        logger.error(`Failed to send media to chat: ${err.message}`);
+        throw err;
+    }
 }
 
 async function sendStickerFile(sock, targetId, filePath) {
     const jid = await resolveNewsletterJid(sock, targetId);
+    const isNewsletter = /@newsletter$/i.test(jid);
     const fileBuffer = await fs.readFile(filePath);
     
+    // For newsletters, stickers may not work - try as image
+    if (isNewsletter) {
+        logger.info(`Sending sticker to newsletter as image: ${path.basename(filePath)}`);
+        try {
+            // Try as WebP image
+            const result = await sock.sendMessage(jid, {
+                image: fileBuffer,
+                mimetype: 'image/webp',
+            });
+            assertWhatsAppSendResult(result, jid, 'sticker-as-image');
+            return { success: true, strategy: 'image' };
+        } catch (err) {
+            logger.warn(`Could not send sticker to newsletter: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    }
+    
+    // For regular chats, try sticker format
     try {
         const result = await sock.sendMessage(jid, {
             sticker: fileBuffer,
             mimetype: 'image/webp',
         });
         assertWhatsAppSendResult(result, jid, 'sticker');
+        return { success: true, strategy: 'sticker' };
     } catch (err) {
-        // For newsletters, try sending as image if sticker fails
-        if (/@newsletter$/i.test(jid)) {
-            logger.warn(`Sticker send failed for newsletter, trying as image: ${err.message}`);
-            const imageResult = await sock.sendMessage(jid, {
-                image: fileBuffer,
-                mimetype: 'image/webp',
-            });
-            assertWhatsAppSendResult(imageResult, jid, 'sticker-as-image');
-            return;
-        }
-        throw err;
+        // Fallback to image
+        logger.warn(`Sticker send failed, trying as image: ${err.message}`);
+        const imageResult = await sock.sendMessage(jid, {
+            image: fileBuffer,
+            mimetype: 'image/webp',
+        });
+        assertWhatsAppSendResult(imageResult, jid, 'sticker-as-image');
+        return { success: true, strategy: 'image' };
     }
 }
 
@@ -545,7 +516,7 @@ async function sendMessage(sock, targetId, payload) {
 
         try {
             if (mediaType === 'sticker') {
-                await sendStickerFile(sock, targetId, filePath);
+                const result = await sendStickerFile(sock, targetId, filePath);
                 // Send caption separately if exists
                 if (hasCaption) {
                     try {
@@ -557,6 +528,11 @@ async function sendMessage(sock, targetId, payload) {
             } else {
                 const result = await sendMediaFile(sock, targetId, filePath, hasCaption ? text : null);
                 
+                // If media was skipped (unsupported for newsletters), caption was already sent
+                if (result?.mediaSkipped) {
+                    return;
+                }
+                
                 // If media sent but caption failed, ensure caption is sent
                 if (hasCaption && result && !result.captionSent) {
                     try {
@@ -567,8 +543,8 @@ async function sendMessage(sock, targetId, payload) {
                 }
             }
         } catch (err) {
-            logger.error(`Failed to send media after all attempts: ${err.message}`);
-            // Final fallback: send as text with source link if available
+            logger.error(`Failed to send media: ${err.message}`);
+            // Final fallback: send as text
             if (hasCaption) {
                 try {
                     await sendText(sock, targetId, text);
@@ -636,6 +612,7 @@ async function checkNewsletterAccess(sock, targetId) {
             logger.info(`WhatsApp newsletter verified: "${metadata.name || inviteCode}" (${inviteCode})`);
             logger.info(`  Subscribers: ${metadata.subscriberCount || 'unknown'}`);
             logger.info(`  Newsletter JID: ${metadata.id}`);
+            logger.info(`  Note: WhatsApp channels only support images, videos, and text messages.`);
             return true;
         }
     } catch (err) {
@@ -644,7 +621,7 @@ async function checkNewsletterAccess(sock, targetId) {
             logger.warn(`Could not verify newsletter ${inviteCode}: GraphQL API error`);
             logger.warn(`  This is a known issue with some Baileys versions.`);
             logger.warn(`  Will attempt to send messages anyway — if you have admin access, it should work.`);
-            return true; // Return true to allow sending attempts
+            return true;
         } else {
             logger.warn(`Could not verify newsletter ${inviteCode}: ${err.message}`);
             logger.warn('Make sure WHATSAPP_TARGET_ID is correct and your account has access to post.');
@@ -703,4 +680,5 @@ export {
     checkNewsletterAccess,
     isConnectionHealthy,
     getConnectionState,
+    isNewsletterSupportedMedia,
 };
