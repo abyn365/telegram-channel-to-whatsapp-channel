@@ -40,7 +40,7 @@ Supports all major Telegram content types:
 ## Prerequisites
 
 - **Ubuntu VPS** (20.04 / 22.04 / 24.04 recommended)
-- **Node.js 18+** — install via [nvm](https://github.com/nvm-sh/nvm) or NodeSource
+- **Node.js 20+** — install via [nvm](https://github.com/nvm-sh/nvm) or NodeSource
 - **PM2** (optional) — `npm install -g pm2`
 - **Telegram API credentials** — get from [my.telegram.org](https://my.telegram.org)
 
