@@ -28,8 +28,8 @@ function validateEnvironment() {
         { key: 'TELEGRAM_API_ID', validate: (v) => !isNaN(parseInt(v)) || 'Must be a number' },
         { key: 'TELEGRAM_API_HASH', validate: (v) => (v && v.length === 32) || 'Must be 32 characters' },
         { key: 'TELEGRAM_PHONE', validate: (v) => (v && v.startsWith('+')) || 'Must start with +' },
-        { key: 'TELEGRAM_CHANNELS', validate: (v) => (v && v.trim()) || 'Must not be empty' },
-        { key: 'WHATSAPP_TARGET_ID', validate: (v) => (v && v.trim()) || 'Must not be empty' },
+        { key: 'TELEGRAM_CHANNELS', validate: (v) => (v && v.trim().length > 0) || 'Must not be empty' },
+        { key: 'WHATSAPP_TARGET_ID', validate: (v) => (v && v.trim().length > 0) || 'Must not be empty' },
     ];
     
     for (const { key, validate } of required) {
