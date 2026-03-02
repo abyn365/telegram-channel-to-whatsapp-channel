@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs-extra';
 import logger from './logger.js';
 import { downloadMedia, getMediaType, extractSenderInfo, getSenderName, buildTelegramMessageLink } from './telegramClient.js';
-import { sendMessage, isConnectionHealthy, getConnectionState } from './whatsappClient.js';
+import { sendMessage, isConnectionHealthy, getConnectionState, getCurrentSocket } from './whatsappClient.js';
 import { buildPayload } from './messageFormatter.js';
 import { initForwardedStore, buildForwardKey, hasForwarded, markForwarded } from './forwardedStore.js';
 import { translateToIndonesian, appendTranslation } from './translator.js';
@@ -76,11 +76,33 @@ const messageQueue = [];
 let isProcessing = false;
 let queueStats = { processed: 0, failed: 0, retried: 0 };
 
-async function processQueue(whatsappSock) {
+async function processQueue() {
     if (isProcessing || messageQueue.length === 0) return;
     isProcessing = true;
 
     while (messageQueue.length > 0) {
+        // Get the current socket (may have changed after reconnection)
+        let currentSock = getCurrentSocket();
+        
+        // If no socket available, wait for reconnection
+        if (!currentSock) {
+            logger.warn('Queue processing: WhatsApp socket not available, waiting for reconnection...');
+            let socketAvailable = false;
+            for (let i = 0; i < 30; i++) { // Wait up to 30 seconds
+                await new Promise((res) => setTimeout(res, 1000));
+                currentSock = getCurrentSocket();
+                if (currentSock && await isConnectionHealthy()) {
+                    socketAvailable = true;
+                    logger.info('Queue processing: WhatsApp socket available again');
+                    break;
+                }
+            }
+            if (!socketAvailable) {
+                logger.error('Queue processing: WhatsApp socket still not available after 30s, pausing queue');
+                break;
+            }
+        }
+        
         // Check WhatsApp connection health with retries
         let healthCheckPassed = false;
         let healthCheckAttempts = 0;
@@ -88,7 +110,7 @@ async function processQueue(whatsappSock) {
         while (!healthCheckPassed && healthCheckAttempts < HEALTH_CHECK_RETRIES) {
             healthCheckAttempts++;
             
-            if (await isConnectionHealthy(whatsappSock)) {
+            if (await isConnectionHealthy()) {
                 healthCheckPassed = true;
                 break;
             }
@@ -106,7 +128,7 @@ async function processQueue(whatsappSock) {
             logger.warn('WhatsApp connection appears unhealthy after multiple checks, pausing queue processing...');
             // Wait longer and retry once more
             await new Promise((res) => setTimeout(res, 10000));
-            if (!await isConnectionHealthy(whatsappSock)) {
+            if (!await isConnectionHealthy()) {
                 logger.error('WhatsApp connection still unhealthy, stopping queue processing');
                 break;
             }
@@ -134,19 +156,35 @@ async function processQueue(whatsappSock) {
     isProcessing = false;
 }
 
-function enqueue(task, whatsappSock) {
+function enqueue(task) {
     if (messageQueue.length >= MAX_QUEUE_SIZE) {
         logger.warn(`Message queue full (${MAX_QUEUE_SIZE}), dropping oldest message`);
         messageQueue.shift();
     }
     messageQueue.push(task);
-    processQueue(whatsappSock);
+    processQueue();
 }
 
 async function forwardMessage(telegramClient, whatsappSock, message, targetId, channelTitle) {
     await initForwardedStore();
 
     enqueue(async () => {
+        // Get the current socket (may have changed after reconnection)
+        // Wait a bit if socket is not immediately available (reconnecting)
+        let currentSock = getCurrentSocket();
+        if (!currentSock) {
+            logger.warn('WhatsApp socket not available, waiting for reconnection...');
+            for (let i = 0; i < 10; i++) {
+                await new Promise((res) => setTimeout(res, 1000));
+                currentSock = getCurrentSocket();
+                if (currentSock) break;
+            }
+            if (!currentSock) {
+                logger.error('WhatsApp socket still not available after 10s, skipping message');
+                return;
+            }
+        }
+        
         const mediaType = getMediaType(message);
         const forwardKey = buildForwardKey(message, targetId);
         
@@ -199,6 +237,12 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         // Retry loop
         while (!success && retryCount < MAX_RETRIES) {
             try {
+                // Get fresh socket reference for each retry (may have reconnected)
+                const sock = getCurrentSocket();
+                if (!sock) {
+                    throw new Error('WhatsApp socket not available');
+                }
+                
                 if (retryCount > 0) {
                     logger.info(`Retry attempt ${retryCount}/${MAX_RETRIES} for message ${message.id}`);
                     await new Promise((res) => setTimeout(res, RETRY_DELAY_MS * retryCount));
@@ -215,7 +259,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                     };
                 }
 
-                await sendMessage(whatsappSock, targetId, messagePayload);
+                await sendMessage(sock, targetId, messagePayload);
                 success = true;
 
                 logger.info(`Message id=${message.id} forwarded to WhatsApp successfully (type: ${mediaType}, media: ${filePath ? 'yes' : 'no'})`);
@@ -231,13 +275,18 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                     // Try to send a fallback text message with source link combined
                     if (payload.text && payload.text.trim()) {
                         try {
+                            // Get fresh socket for fallback
+                            const fallbackSock = getCurrentSocket();
+                            if (!fallbackSock) {
+                                throw new Error('WhatsApp socket not available for fallback');
+                            }
                             // Use the same function for consistency - combine text with source link
                             const fallbackText = buildSourceFallbackText(
                                 `[Failed to forward media]\n\n${payload.text}`,
                                 sourceLink,
                                 mediaType
                             );
-                            await sendMessage(whatsappSock, targetId, {
+                            await sendMessage(fallbackSock, targetId, {
                                 text: fallbackText,
                                 filePath: null,
                                 mediaType: 'text',
@@ -266,7 +315,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         if (filePath) {
             await fs.remove(filePath).catch(() => {});
         }
-    }, whatsappSock);
+    });
 }
 
 // Export stats for monitoring
