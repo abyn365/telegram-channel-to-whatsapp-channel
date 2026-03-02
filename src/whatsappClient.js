@@ -10,6 +10,12 @@ import { fileURLToPath } from 'url';
 import sharp from 'sharp';
 import logger from './logger.js';
 
+// Configuration for video handling
+const VIDEO_UPLOAD_RETRIES = parseInt(process.env.VIDEO_UPLOAD_RETRIES, 10) || 2;
+const VIDEO_UPLOAD_RETRY_DELAY_MS = parseInt(process.env.VIDEO_UPLOAD_RETRY_DELAY_MS, 10) || 3000;
+const VIDEO_DDL_FALLBACK = String(process.env.VIDEO_DDL_FALLBACK || 'true').toLowerCase() === 'true';
+const MAX_VIDEO_SIZE_MB = parseInt(process.env.MAX_VIDEO_SIZE_MB, 10) || 16;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -93,6 +99,7 @@ function isNewsletterSupportedMedia(mimeType) {
 
 async function generateThumbnail(buffer, mimeType) {
     try {
+        // Only generate thumbnails for images
         if (!mimeType?.startsWith('image/')) {
             return null;
         }
@@ -105,6 +112,19 @@ async function generateThumbnail(buffer, mimeType) {
         return thumbnailBuffer;
     } catch (err) {
         logger.debug(`Could not generate thumbnail: ${err.message}`);
+        return null;
+    }
+}
+
+// Generate a video thumbnail from the first frame (for videos)
+async function generateVideoThumbnail(buffer) {
+    try {
+        // For videos, we'll try to use sharp if the buffer starts with a valid image header
+        // This is a fallback - ideally ffmpeg would be used, but we want to avoid extra dependencies
+        // WhatsApp can often generate its own thumbnail server-side if we don't provide one
+        return null;
+    } catch (err) {
+        logger.debug(`Could not generate video thumbnail: ${err.message}`);
         return null;
     }
 }
@@ -315,13 +335,19 @@ async function sendText(sock, targetId, text) {
     assertWhatsAppSendResult(result, jid, 'text');
 }
 
-// Send image or video to newsletter
-async function sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption) {
+// Send image or video to newsletter with retry logic
+async function sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption, filename = 'media') {
     const isImage = mimeType.startsWith('image/');
     const isGif = mimeType === 'image/gif';
     const isVideo = mimeType.startsWith('video/') || isGif;
+    const fileSizeMB = fileBuffer.length / (1024 * 1024);
     
-    logger.info(`Sending ${isImage ? 'image' : 'video'} to newsletter ${jid} (${mimeType})`);
+    logger.info(`Sending ${isImage ? 'image' : 'video'} to newsletter ${jid} (${mimeType}, ${fileSizeMB.toFixed(2)} MB)`);
+    
+    // Check video size limit for newsletters
+    if (isVideo && fileSizeMB > MAX_VIDEO_SIZE_MB) {
+        logger.warn(`Video file size (${fileSizeMB.toFixed(2)} MB) exceeds limit (${MAX_VIDEO_SIZE_MB} MB), may fail to upload`);
+    }
     
     // Generate thumbnail for images
     let thumbnail = null;
@@ -338,32 +364,63 @@ async function sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, cap
             jpegThumbnail: thumbnail,
         };
     } else {
-        // Video or GIF
+        // Video or GIF - ensure proper mimetype for WhatsApp
+        // WhatsApp prefers video/mp4 for most video content
+        const normalizedMimeType = isGif ? 'video/mp4' : (mimeType || 'video/mp4');
         messageContent = {
             video: fileBuffer,
-            mimetype: isGif ? 'video/mp4' : mimeType,
+            mimetype: normalizedMimeType,
             gifPlayback: isGif,
             jpegThumbnail: thumbnail,
         };
     }
 
-    // Send media
-    const result = await sock.sendMessage(jid, messageContent);
-    assertWhatsAppSendResult(result, jid, isImage ? 'image' : 'video');
+    // Send media with retry logic for videos
+    let lastError = null;
+    const maxRetries = isVideo ? VIDEO_UPLOAD_RETRIES : 1;
     
-    // For newsletters, send caption as separate message
-    let captionSent = false;
-    if (caption && caption.trim()) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            await sendText(sock, jid, caption);
-            captionSent = true;
-            logger.debug('Caption sent as separate text message to newsletter');
-        } catch (captionErr) {
-            logger.warn(`Failed to send caption to newsletter: ${captionErr.message}`);
+            if (attempt > 1) {
+                logger.info(`Retrying video upload (attempt ${attempt}/${maxRetries})...`);
+                await new Promise(resolve => setTimeout(resolve, VIDEO_UPLOAD_RETRY_DELAY_MS * (attempt - 1)));
+            }
+            
+            const result = await sock.sendMessage(jid, messageContent);
+            assertWhatsAppSendResult(result, jid, isImage ? 'image' : 'video');
+            
+            // For newsletters, send caption as separate message
+            let captionSent = false;
+            if (caption && caption.trim()) {
+                try {
+                    await sendText(sock, jid, caption);
+                    captionSent = true;
+                    logger.debug('Caption sent as separate text message to newsletter');
+                } catch (captionErr) {
+                    logger.warn(`Failed to send caption to newsletter: ${captionErr.message}`);
+                }
+            }
+            
+            return { success: true, captionSent, strategy: 'newsletter-media' };
+            
+        } catch (err) {
+            lastError = err;
+            const isLastAttempt = attempt === maxRetries;
+            
+            if (err.message?.includes('Media upload failed') || err.message?.includes('upload')) {
+                logger.warn(`Media upload failed on attempt ${attempt}/${maxRetries}: ${err.message}`);
+                if (isLastAttempt) {
+                    break;
+                }
+            } else {
+                // Non-upload error, don't retry
+                throw err;
+            }
         }
     }
     
-    return { success: true, captionSent, strategy: 'newsletter-media' };
+    // All retries exhausted
+    throw lastError || new Error('Media upload failed after all retries');
 }
 
 // Send media to regular chat (supports all types including documents and audio)
@@ -428,8 +485,10 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
     const filename = path.basename(filePath);
     const fileBuffer = await fs.readFile(filePath);
+    const fileSizeMB = fileBuffer.length / (1024 * 1024);
+    const isVideo = mimeType.startsWith('video/');
     
-    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), size: ${(fileBuffer.length / 1024).toFixed(2)} KB`);
+    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), size: ${fileSizeMB.toFixed(2)} MB`);
 
     // For newsletters, check if media type is supported
     if (isNewsletter) {
@@ -450,9 +509,20 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
 
         // Send image or video to newsletter
         try {
-            return await sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption);
+            return await sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption, filename);
         } catch (err) {
             logger.error(`Failed to send media to newsletter: ${err.message}`);
+            
+            // For videos, optionally use DDL fallback if configured
+            if (isVideo && VIDEO_DDL_FALLBACK && options.sourceLink) {
+                logger.info(`Using DDL fallback for video: ${filename}`);
+                const fallbackText = caption 
+                    ? `${caption}\n\n🎥 Video: ${options.sourceLink}`
+                    : `🎥 Video: ${options.sourceLink}`;
+                await sendText(sock, jid, fallbackText);
+                return { success: true, captionSent: !!caption, strategy: 'video-ddl-fallback', mediaSkipped: true };
+            }
+            
             throw err;
         }
     }
@@ -509,7 +579,7 @@ async function sendStickerFile(sock, targetId, filePath) {
 }
 
 async function sendMessage(sock, targetId, payload) {
-    const { text, filePath, mediaType } = payload;
+    const { text, filePath, mediaType, sourceLink } = payload;
 
     if (filePath && (await fs.pathExists(filePath))) {
         const hasCaption = text && text.trim();
@@ -526,7 +596,7 @@ async function sendMessage(sock, targetId, payload) {
                     }
                 }
             } else {
-                const result = await sendMediaFile(sock, targetId, filePath, hasCaption ? text : null);
+                const result = await sendMediaFile(sock, targetId, filePath, hasCaption ? text : null, { sourceLink });
                 
                 // If media was skipped (unsupported for newsletters), caption was already sent
                 if (result?.mediaSkipped) {

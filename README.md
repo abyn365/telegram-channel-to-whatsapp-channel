@@ -91,6 +91,15 @@ WHATSAPP_TARGET_ID=120363282083849178@newsletter
 | `HEALTH_CHECK_INTERVAL_MS` | How often to check connection health | `60000` |
 | `MAX_FILE_SIZE_MB` | Maximum file size to forward (WhatsApp limit: 100) | `50` |
 
+### Video Handling Options (WhatsApp Channels)
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `MAX_VIDEO_SIZE_MB` | Maximum video file size for WhatsApp channels (larger videos may fail) | `16` |
+| `VIDEO_UPLOAD_RETRIES` | Number of retry attempts for video uploads to channels | `2` |
+| `VIDEO_UPLOAD_RETRY_DELAY_MS` | Delay between video upload retries | `3000` |
+| `VIDEO_DDL_FALLBACK` | When video upload fails, send source link instead | `true` |
+
 ---
 
 ## 3 · Find Your WhatsApp Channel or Group ID
@@ -277,6 +286,8 @@ Health check: Telegram=OK, WhatsApp=OK, Queue=0 pending, 42 processed, 0 failed
 | Images not showing in channel | WhatsApp channels only support images/videos; check logs |
 | Documents not forwarded | WhatsApp channels don't support documents; only images/videos |
 | Audio not forwarded | WhatsApp channels don't support audio; sent as text instead |
+| **Videos fail to upload** | Enable `VIDEO_DDL_FALLBACK=true` to send source links when upload fails |
+| **"Media upload failed on all hosts"** | Videos to channels often fail; the system will retry and fallback to source link |
 | Translation not working | Ensure LibreTranslate is running on the configured URL |
 | Configuration errors | Check the console output for specific missing/invalid settings |
 | LibreTranslate port 5000 already in use | Set `LIBRETRANSLATE_PORT=5001` (or another free port) in `.env` |
