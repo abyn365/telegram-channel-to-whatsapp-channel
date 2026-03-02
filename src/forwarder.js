@@ -184,7 +184,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
         const sourceLink = await buildTelegramMessageLink(telegramClient, message);
         
         // In DDL mode, build payload without filePath - we'll send link instead
-        const payload = buildPayload(message, DDL_MODE ? null : filePath, channelTitle, senderInfo);
+        const payload = buildPayload(message, DDL_MODE ? null : filePath, channelTitle, senderInfo, sourceLink);
 
         // Translation
         try {

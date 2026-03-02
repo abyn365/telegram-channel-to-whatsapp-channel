@@ -144,7 +144,7 @@ function buildMediaCaption(message, channelTitle, senderInfo) {
     return truncateText(parts.join('\n\n'), MAX_CAPTION_LENGTH);
 }
 
-function buildPayload(message, filePath, channelTitle, senderInfo) {
+function buildPayload(message, filePath, channelTitle, senderInfo, sourceLink = null) {
     const prefix = process.env.MESSAGE_PREFIX || '';
     const text = buildCaption(message, channelTitle, prefix, senderInfo);
     const mediaType = getMediaType(message);
@@ -157,6 +157,7 @@ function buildPayload(message, filePath, channelTitle, senderInfo) {
         mediaType, 
         rawText,
         metadata: mediaMetadata,
+        sourceLink,
     };
 }
 
