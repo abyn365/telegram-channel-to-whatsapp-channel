@@ -50,6 +50,9 @@ let _isConnected = false;
 let _reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
+// Store the current active socket for reconnection scenarios
+let _currentSocket = null;
+
 const SESSION_DIR = path.join(__dirname, '../sessions/baileys');
 const newsletterJidCache = new Map();
 
@@ -164,12 +167,14 @@ async function createWhatsAppClient(onReconnect) {
                 clearTimeout(timeout);
                 _isConnected = true;
                 _reconnectAttempts = 0;
+                _currentSocket = sock;
                 logger.info('WhatsApp terhubung via Baileys (WebSocket).');
                 resolve();
             }
 
             if (connection === 'close') {
                 _isConnected = false;
+                _currentSocket = null;
                 const statusCode = lastDisconnect?.error instanceof Boom
                     ? lastDisconnect.error.output?.statusCode
                     : null;
@@ -661,17 +666,25 @@ function getConnectionState() {
     return _isConnected;
 }
 
+// Get the current active socket - useful after reconnection
+function getCurrentSocket() {
+    return _currentSocket;
+}
+
 async function isConnectionHealthy(sock) {
-    if (!sock) return false;
+    // If no sock provided, use the current stored socket
+    const socketToCheck = sock || _currentSocket;
+    
+    if (!socketToCheck) return false;
     if (_isConnected) return true;
 
     try {
-        const ws = sock.ws || sock._ws;
+        const ws = socketToCheck.ws || socketToCheck._ws;
         if (ws && typeof ws.readyState === 'number') return ws.readyState === 1;
     } catch {}
 
     try {
-        if (sock.user && sock.user.id) return true;
+        if (socketToCheck.user && socketToCheck.user.id) return true;
     } catch {}
 
     return false;
@@ -690,5 +703,6 @@ export {
     checkNewsletterAccess,
     isConnectionHealthy,
     getConnectionState,
+    getCurrentSocket,
     isNewsletterSupportedMedia,
 };
