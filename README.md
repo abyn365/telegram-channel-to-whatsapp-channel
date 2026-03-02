@@ -279,6 +279,7 @@ Health check: Telegram=OK, WhatsApp=OK, Queue=0 pending, 42 processed, 0 failed
 | Audio not forwarded | WhatsApp channels don't support audio; sent as text instead |
 | Translation not working | Ensure LibreTranslate is running on the configured URL |
 | Configuration errors | Check the console output for specific missing/invalid settings |
+| LibreTranslate port 5000 already in use | Set `LIBRETRANSLATE_PORT=5001` (or another free port) in `.env` |
 
 ---
 
