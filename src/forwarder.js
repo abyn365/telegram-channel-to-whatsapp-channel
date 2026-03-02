@@ -218,33 +218,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                 await sendMessage(whatsappSock, targetId, messagePayload);
                 success = true;
 
-                // Send source link separately only in non-DDL mode when media exists
-                const sendLinkFallback = String(process.env.WHATSAPP_SEND_SOURCE_LINK || 'true').toLowerCase() !== 'false';
-                if (!DDL_MODE && sendLinkFallback && filePath && sourceLink && shouldSendSourceFallback(message, targetId)) {
-                    // Combine caption with source link instead of sending separately
-                    const fallbackText = buildSourceFallbackText(payload.text, sourceLink, mediaType);
-                    if (fallbackText) {
-                        try {
-                            await sendMessage(whatsappSock, targetId, {
-                                text: fallbackText,
-                                filePath: null,
-                                mediaType: 'text',
-                            });
-                        } catch (linkErr) {
-                            logger.debug(`Failed to send source link: ${linkErr.message}`);
-                        }
-                    }
-                }
-
-                await markForwarded(forwardKey, {
-                    messageId: message.id,
-                    channelTitle,
-                    mediaType,
-                    sourceLink,
-                    timestamp: new Date().toISOString(),
-                });
-
-                logger.info(`Message id=${message.id} forwarded to WhatsApp successfully.`);
+                logger.info(`Message id=${message.id} forwarded to WhatsApp successfully (type: ${mediaType}, media: ${filePath ? 'yes' : 'no'})`);
                 
             } catch (err) {
                 retryCount++;
@@ -275,6 +249,17 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                     }
                 }
             }
+        }
+
+        // Mark as forwarded only if successful
+        if (success) {
+            await markForwarded(forwardKey, {
+                messageId: message.id,
+                channelTitle,
+                mediaType,
+                sourceLink,
+                timestamp: new Date().toISOString(),
+            });
         }
 
         // Clean up temp file
