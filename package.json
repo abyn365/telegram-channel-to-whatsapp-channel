@@ -21,6 +21,9 @@
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "bugs": {
     "url": "https://github.com/abyn365/telegram-channel-to-whatsapp-channel/issues"
   },
