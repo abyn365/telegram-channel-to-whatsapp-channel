@@ -10,12 +10,36 @@ import { fileURLToPath } from 'url';
 import sharp from 'sharp';
 import logger from './logger.js';
 
-// Configuration for video handling
+// ============================================================
+// ROOT CAUSE: WhatsApp ACK error 479
+//
+// Semua library WebSocket (Baileys, WAHA NOWEB, whatsmeow) yang
+// mencoba upload media ke newsletter/channel WhatsApp akan
+// mendapatkan error 479 dari server WhatsApp. API mengembalikan
+// sukses (message ID tergenerate) tapi media TIDAK PERNAH muncul
+// di channel. Ini bukan bug kode — ini pembatasan server WhatsApp.
+//
+// Referensi:
+//   https://github.com/devlikeapro/waha/issues/1523
+//   https://github.com/devlikeapro/waha/issues/1504
+//   https://github.com/tulir/whatsmeow/issues/690
+//
+// SOLUSI: Untuk newsletter, gunakan strategi DDL:
+//   - Kirim teks dengan caption + link sumber sebagai pratinjau
+//   - Media tetap bisa diklik dari link sumber (Telegram, dll)
+//   - Untuk grup/DM biasa, upload media tetap berjalan normal
+// ============================================================
+
 const VIDEO_UPLOAD_RETRIES = parseInt(process.env.VIDEO_UPLOAD_RETRIES, 10) || 2;
 const VIDEO_UPLOAD_RETRY_DELAY_MS = parseInt(process.env.VIDEO_UPLOAD_RETRY_DELAY_MS, 10) || 3000;
-const VIDEO_DDL_FALLBACK = String(process.env.VIDEO_DDL_FALLBACK || 'true').toLowerCase() === 'true';
 const MAX_VIDEO_SIZE_MB = parseInt(process.env.MAX_VIDEO_SIZE_MB, 10) || 16;
 const WHATSAPP_SEND_SOURCE_LINK = String(process.env.WHATSAPP_SEND_SOURCE_LINK || 'true').toLowerCase() === 'true';
+
+// NEWSLETTER_MEDIA_MODE mengontrol perilaku media ke newsletter:
+//   'ddl'    (default) - kirim teks+link, tidak upload media (DIREKOMENDASIKAN)
+//   'try'    - coba upload dulu, fallback ke ddl jika gagal
+//   'native' - hanya coba upload (akan gagal dengan error 479, hanya untuk debugging)
+const NEWSLETTER_MEDIA_MODE = (process.env.NEWSLETTER_MEDIA_MODE || 'ddl').toLowerCase();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,96 +51,83 @@ let _reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
 const SESSION_DIR = path.join(__dirname, '../sessions/baileys');
-
-// Cache for resolved newsletter JIDs
 const newsletterJidCache = new Map();
-
-// Media types that WhatsApp channels/newsletters support
-const NEWSLETTER_SUPPORTED_MEDIA = new Set([
-    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-    'video/mp4', 'video/3gpp', 'video/quicktime', 'video/webm',
-]);
 
 function normalizeWhatsAppId(targetId) {
     if (!targetId) return targetId;
-
     const sanitized = String(targetId).trim().replace(/^['"]+|['"]+$/g, '');
     if (!sanitized) return sanitized;
-
-    if (/@newsletter$/i.test(sanitized)) {
-        return sanitized;
-    }
-
-    if (sanitized.includes('@')) {
-        return sanitized;
-    }
+    if (/@newsletter$/i.test(sanitized)) return sanitized;
+    if (sanitized.includes('@')) return sanitized;
 
     const channelUrlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
-    if (channelUrlMatch) {
-        return `${channelUrlMatch[1]}@newsletter`;
-    }
-
-    if (/^120\d{10,}$/.test(sanitized)) {
-        return `${sanitized}@g.us`;
-    }
-
-    if (/^[a-zA-Z0-9_-]{15,}$/.test(sanitized) && !sanitized.includes('@')) {
-        return `${sanitized}@newsletter`;
-    }
-
+    if (channelUrlMatch) return `${channelUrlMatch[1]}@newsletter`;
+    if (/^120\d{10,}$/.test(sanitized)) return `${sanitized}@g.us`;
+    if (/^[a-zA-Z0-9_-]{15,}$/.test(sanitized) && !sanitized.includes('@')) return `${sanitized}@newsletter`;
     return sanitized;
 }
 
 function extractInviteCode(targetId) {
     if (!targetId) return null;
-
     const sanitized = String(targetId).trim();
     const urlMatch = sanitized.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
     if (urlMatch) return urlMatch[1];
-
-    if (/^[a-zA-Z0-9_-]{15,}$/.test(sanitized) && !sanitized.includes('@')) {
-        return sanitized;
-    }
-
-    if (/@newsletter$/i.test(sanitized)) {
-        return sanitized.replace(/@newsletter$/i, '');
-    }
-
+    if (/^[a-zA-Z0-9_-]{15,}$/.test(sanitized) && !sanitized.includes('@')) return sanitized;
+    if (/@newsletter$/i.test(sanitized)) return sanitized.replace(/@newsletter$/i, '');
     return null;
 }
 
-// Check if media type is supported by WhatsApp newsletters
 function isNewsletterSupportedMedia(mimeType) {
     if (!mimeType) return false;
-    const normalized = mimeType.toLowerCase();
-    if (normalized.startsWith('image/')) return true;
-    if (normalized.startsWith('video/')) return true;
-    return false;
+    const n = mimeType.toLowerCase();
+    return n.startsWith('image/') || n.startsWith('video/');
 }
 
 async function generateThumbnail(buffer, mimeType) {
     try {
         if (!mimeType?.startsWith('image/')) return null;
-
-        const thumbnailBuffer = await sharp(buffer)
+        return await sharp(buffer)
             .resize(100, 100, { fit: 'inside', withoutEnlargement: true })
             .jpeg({ quality: 40 })
             .toBuffer();
-
-        return thumbnailBuffer;
     } catch (err) {
-        logger.debug(`Could not generate thumbnail: ${err.message}`);
+        logger.debug(`Thumbnail generation failed: ${err.message}`);
         return null;
     }
 }
 
+// ============================================================
+// Buat pesan DDL untuk newsletter.
+// Format: caption + ikon + link sumber
+// Contoh output:
+//   ⚡️ IDF merilis rekaman serangan di Lebanon.
+//   📺 Sumber: https://t.me/wfwitness/73711
+// ============================================================
+function buildDDLMessage(caption, sourceLink, mimeType, filename) {
+    const parts = [];
+
+    if (caption?.trim()) {
+        parts.push(caption.trim());
+    }
+
+    if (sourceLink || filename) {
+        const isVideo = mimeType?.startsWith('video/');
+        const isImage = mimeType?.startsWith('image/');
+        const icon = isVideo ? '📺' : isImage ? '🖼️' : '📎';
+        const label = isVideo ? 'Sumber video' : isImage ? 'Sumber gambar' : 'Sumber media';
+        const link = sourceLink || filename;
+        parts.push(`${icon} ${label}: ${link}`);
+    }
+
+    return parts.join('\n\n');
+}
+
 async function createWhatsAppClient(onReconnect) {
     await fs.ensureDir(SESSION_DIR);
-
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
-    logger.info(`Using Baileys v${version.join('.')} (WebSocket-based, no Chrome required)`);
+    logger.info(`Using Baileys v${version.join('.')} (WebSocket-based)`);
 
     const sock = makeWASocket({
         version,
@@ -132,7 +143,7 @@ async function createWhatsAppClient(onReconnect) {
         retryRequestDelayMs: 250,
         maxMsgRetryCount: 5,
         fireInitQueries: true,
-        shouldIgnoreJid: (jid) => false,
+        shouldIgnoreJid: () => false,
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -144,16 +155,16 @@ async function createWhatsAppClient(onReconnect) {
 
         sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
             if (qr) {
-                logger.info('WhatsApp QR code — scan with your phone:');
+                logger.info('WhatsApp QR code — scan dengan HP kamu:');
                 qrcode.generate(qr, { small: true });
-                logger.info('(Open WhatsApp → Linked Devices → Link a Device → scan QR)');
+                logger.info('(Buka WhatsApp → Linked Devices → Link a Device → scan QR)');
             }
 
             if (connection === 'open') {
                 clearTimeout(timeout);
                 _isConnected = true;
                 _reconnectAttempts = 0;
-                logger.info('WhatsApp connected successfully via Baileys (WebSocket).');
+                logger.info('WhatsApp terhubung via Baileys (WebSocket).');
                 resolve();
             }
 
@@ -166,7 +177,7 @@ async function createWhatsAppClient(onReconnect) {
 
                 if (loggedOut) {
                     clearTimeout(timeout);
-                    logger.error('WhatsApp session logged out. Delete sessions/baileys/ and restart to re-authenticate.');
+                    logger.error('WhatsApp session logout. Hapus sessions/baileys/ dan restart.');
                     const error = new Error('WhatsApp logged out');
                     error.isLoggedOut = true;
                     reject(error);
@@ -175,17 +186,14 @@ async function createWhatsAppClient(onReconnect) {
 
                 if (!_isConnected) {
                     clearTimeout(timeout);
-                    logger.warn(`WhatsApp connection closed during init (code ${statusCode}). Retrying...`);
                     const error = new Error(`WhatsApp connection closed: ${statusCode}`);
                     error.statusCode = statusCode;
                     reject(error);
                     return;
                 }
 
-                logger.warn(`WhatsApp disconnected (code ${statusCode}). Will reconnect...`);
-                if (typeof onReconnect === 'function') {
-                    onReconnect();
-                }
+                logger.warn(`WhatsApp terputus (kode ${statusCode}). Akan reconnect...`);
+                if (typeof onReconnect === 'function') onReconnect();
             }
         });
 
@@ -199,8 +207,7 @@ async function createWhatsAppClient(onReconnect) {
 
 async function createWhatsAppClientWithReconnect() {
     let sock = null;
-    let resolveReady;
-    let rejectReady;
+    let resolveReady, rejectReady;
     let isReady = false;
     const readyPromise = new Promise((res, rej) => {
         resolveReady = res;
@@ -210,15 +217,11 @@ async function createWhatsAppClientWithReconnect() {
     const scheduleReconnect = async (reason) => {
         _reconnectAttempts++;
         if (_reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-            logger.error(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Exiting.`);
+            logger.error(`Max reconnect attempts reached. Exiting.`);
             process.exit(1);
         }
         const delay = Math.min(1000 * Math.pow(2, _reconnectAttempts), 60_000);
-        if (reason) {
-            logger.warn(`WhatsApp connection failed (${reason}). Reconnecting in ${delay / 1000}s (attempt ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-        } else {
-            logger.info(`Reconnecting WhatsApp in ${delay / 1000}s (attempt ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-        }
+        logger.warn(`WhatsApp reconnecting dalam ${delay / 1000}s (percobaan ${_reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
         await sleep(delay);
         await connect();
     };
@@ -235,13 +238,10 @@ async function createWhatsAppClientWithReconnect() {
             }
         } catch (err) {
             if (err?.isLoggedOut) {
-                if (!isReady) {
-                    rejectReady(err);
-                }
+                if (!isReady) rejectReady(err);
                 return;
             }
-            const reason = err?.message || 'unknown error';
-            await scheduleReconnect(reason);
+            await scheduleReconnect(err?.message || 'unknown error');
         }
     };
 
@@ -252,16 +252,13 @@ async function createWhatsAppClientWithReconnect() {
 async function resolveNewsletterJid(sock, targetId) {
     const normalizedId = normalizeWhatsAppId(targetId);
     if (!/@newsletter$/i.test(normalizedId)) return normalizedId;
-
-    if (newsletterJidCache.has(normalizedId)) {
-        return newsletterJidCache.get(normalizedId);
-    }
+    if (newsletterJidCache.has(normalizedId)) return newsletterJidCache.get(normalizedId);
 
     const inviteCode = extractInviteCode(targetId);
     if (!inviteCode) return normalizedId;
 
     if (typeof sock.newsletterMetadata !== 'function') {
-        logger.debug(`newsletterMetadata not available, using normalized ID: ${normalizedId}`);
+        logger.debug(`newsletterMetadata tidak tersedia, menggunakan: ${normalizedId}`);
         return normalizedId;
     }
 
@@ -274,11 +271,7 @@ async function resolveNewsletterJid(sock, targetId) {
             return jid;
         }
     } catch (err) {
-        if (err.message?.includes('GraphQL')) {
-            logger.debug(`GraphQL error when resolving newsletter ${inviteCode}: ${err.message}`);
-        } else {
-            logger.debug(`Could not resolve newsletter invite code ${inviteCode}: ${err.message}`);
-        }
+        logger.debug(`Gagal resolve newsletter ${inviteCode}: ${err.message}`);
     }
 
     return normalizedId;
@@ -286,18 +279,15 @@ async function resolveNewsletterJid(sock, targetId) {
 
 function assertWhatsAppSendResult(result, jid, contextLabel) {
     const messageId = result?.key?.id || result?.key?.remoteJid || result?.status;
-
     if (!messageId && !result) {
-        throw new Error(`WhatsApp returned an empty send result for ${contextLabel} -> ${jid}`);
+        throw new Error(`WhatsApp returned empty send result for ${contextLabel} -> ${jid}`);
     }
-
     const status = result?.status;
     if (status === 'error' || status === 'failed') {
-        throw new Error(`WhatsApp send failed with status: ${status} for ${contextLabel} -> ${jid}`);
+        throw new Error(`WhatsApp send failed with status: ${status}`);
     }
-
     if (/@newsletter$/i.test(jid)) {
-        logger.info(`Newsletter message sent successfully: ${messageId || 'pending'} (${contextLabel})`);
+        logger.info(`Newsletter message sent: ${messageId || 'pending'} (${contextLabel})`);
     } else {
         logger.debug(`WhatsApp message sent: ${messageId || 'pending'} (${contextLabel})`);
     }
@@ -311,117 +301,11 @@ async function sendText(sock, targetId, text) {
 }
 
 // ============================================================
-// FIXED: Send image or video to newsletter
-// Root cause: Baileys newsletter requires media to be uploaded
-// via the correct method with proper content-type and fields.
-// Missing: fileLength, seconds (video), proper thumbnail base64.
+// Kirim media ke grup atau DM biasa (bukan newsletter)
+// Method ini berfungsi normal karena bukan ke newsletter
 // ============================================================
-async function sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption, filename = 'media', sourceLink = null) {
-    const isGif = mimeType === 'image/gif' || (mimeType === 'video/mp4' && filename.endsWith('.gif'));
-    const isVideo = mimeType.startsWith('video/') || isGif;
-    const isImage = mimeType.startsWith('image/') && !isGif;
-    const fileSizeMB = fileBuffer.length / (1024 * 1024);
-
-    logger.info(`Sending ${isImage ? 'image' : 'video'} to newsletter ${jid} (${mimeType}, ${fileSizeMB.toFixed(2)} MB)`);
-
-    if (isVideo && fileSizeMB > MAX_VIDEO_SIZE_MB) {
-        logger.warn(`Video file size (${fileSizeMB.toFixed(2)} MB) exceeds limit (${MAX_VIDEO_SIZE_MB} MB), may fail to upload`);
-    }
-
-    // Generate thumbnail for images
-    let jpegThumbnail = null;
-    if (isImage) {
-        try {
-            jpegThumbnail = await sharp(fileBuffer)
-                .resize(100, 100, { fit: 'inside', withoutEnlargement: true })
-                .jpeg({ quality: 40 })
-                .toBuffer();
-        } catch (e) {
-            logger.debug(`Thumbnail generation failed: ${e.message}`);
-        }
-    }
-
-    // Build message content
-    // KEY FIX: For newsletters, Baileys needs these exact fields to properly
-    // publish the media. Without fileLength/mediaType set correctly, the server
-    // accepts the upload but doesn't render it in the channel feed.
-    let messageContent;
-
-    if (isImage) {
-        messageContent = {
-            image: fileBuffer,
-            mimetype: mimeType,
-            fileLength: fileBuffer.length,
-            ...(jpegThumbnail ? { jpegThumbnail } : {}),
-        };
-    } else {
-        // Video / GIF
-        const videoMime = isGif ? 'video/mp4' : mimeType;
-        messageContent = {
-            video: fileBuffer,
-            mimetype: videoMime,
-            fileLength: fileBuffer.length,
-            gifPlayback: isGif,
-            ...(jpegThumbnail ? { jpegThumbnail } : {}),
-        };
-    }
-
-    let lastError = null;
-    const maxRetries = isVideo ? VIDEO_UPLOAD_RETRIES : 1;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            if (attempt > 1) {
-                logger.info(`Retrying ${isVideo ? 'video' : 'image'} upload (attempt ${attempt}/${maxRetries})...`);
-                await sleep(VIDEO_UPLOAD_RETRY_DELAY_MS * (attempt - 1));
-            }
-
-            const result = await sock.sendMessage(jid, messageContent);
-            assertWhatsAppSendResult(result, jid, isImage ? 'image' : 'video');
-
-            // Send caption + optional source link as separate text message
-            const captionParts = [];
-            if (caption && caption.trim()) captionParts.push(caption.trim());
-            if (WHATSAPP_SEND_SOURCE_LINK && sourceLink) captionParts.push(`🔗 ${sourceLink}`);
-
-            if (captionParts.length > 0) {
-                try {
-                    await sleep(800); // small delay before caption
-                    const captionText = captionParts.join('\n\n');
-                    const captionResult = await sock.sendMessage(jid, { text: captionText });
-                    assertWhatsAppSendResult(captionResult, jid, 'caption');
-                    logger.debug('Caption sent as separate text message to newsletter');
-                } catch (captionErr) {
-                    logger.warn(`Failed to send caption to newsletter: ${captionErr.message}`);
-                }
-            }
-
-            return { success: true, captionSent: captionParts.length > 0, strategy: 'newsletter-media' };
-
-        } catch (err) {
-            lastError = err;
-            const isLastAttempt = attempt === maxRetries;
-
-            if (
-                err.message?.includes('Media upload failed') ||
-                err.message?.includes('upload') ||
-                err.message?.includes('media')
-            ) {
-                logger.warn(`Media upload failed on attempt ${attempt}/${maxRetries}: ${err.message}`);
-                if (isLastAttempt) break;
-            } else {
-                // Non-upload error, don't retry
-                throw err;
-            }
-        }
-    }
-
-    throw lastError || new Error('Media upload failed after all retries');
-}
-
-// Send media to regular chat (supports all types including documents and audio)
 async function sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, caption) {
-    logger.info(`Sending media to chat ${jid}: ${filename} (${mimeType})`);
+    logger.info(`Mengirim media ke chat ${jid}: ${filename} (${mimeType})`);
 
     const isImage = mimeType.startsWith('image/');
     const isGif = mimeType === 'image/gif';
@@ -429,7 +313,7 @@ async function sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, captio
     const isAudio = mimeType.startsWith('audio/');
 
     let thumbnail = null;
-    if (isImage) {
+    if (isImage && !isGif) {
         thumbnail = await generateThumbnail(fileBuffer, mimeType);
     }
 
@@ -449,7 +333,6 @@ async function sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, captio
             mimetype: isGif ? 'video/mp4' : mimeType,
             gifPlayback: isGif,
             caption: caption || undefined,
-            jpegThumbnail: thumbnail,
             fileLength: fileBuffer.length,
         };
     } else if (isAudio) {
@@ -461,7 +344,6 @@ async function sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, captio
             fileLength: fileBuffer.length,
         };
     } else {
-        // Document for other file types
         messageContent = {
             document: fileBuffer,
             mimetype: mimeType,
@@ -474,8 +356,65 @@ async function sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, captio
 
     const result = await sock.sendMessage(jid, messageContent);
     assertWhatsAppSendResult(result, jid, 'chat-media');
-
     return { success: true, captionSent: !!caption, strategy: 'chat-native' };
+}
+
+// ============================================================
+// Coba upload media native ke newsletter.
+// PERINGATAN: Ini AKAN GAGAL dengan error 479 dari WhatsApp.
+// Hanya digunakan dalam mode 'try' sebagai percobaan pertama,
+// atau mode 'native' untuk debugging.
+// ============================================================
+async function tryNativeNewsletterUpload(sock, jid, fileBuffer, mimeType, filename) {
+    const isGif = mimeType === 'image/gif';
+    const isVideo = mimeType.startsWith('video/') || isGif;
+    const isImage = mimeType.startsWith('image/') && !isGif;
+
+    let jpegThumbnail = null;
+    if (isImage) {
+        jpegThumbnail = await generateThumbnail(fileBuffer, mimeType);
+    }
+
+    const messageContent = isImage
+        ? {
+            image: fileBuffer,
+            mimetype: mimeType,
+            fileLength: fileBuffer.length,
+            ...(jpegThumbnail ? { jpegThumbnail } : {}),
+        }
+        : {
+            video: fileBuffer,
+            mimetype: isGif ? 'video/mp4' : mimeType,
+            fileLength: fileBuffer.length,
+            gifPlayback: isGif,
+            ...(jpegThumbnail ? { jpegThumbnail } : {}),
+        };
+
+    const maxRetries = isVideo ? VIDEO_UPLOAD_RETRIES : 1;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            if (attempt > 1) {
+                await sleep(VIDEO_UPLOAD_RETRY_DELAY_MS * (attempt - 1));
+                logger.info(`Retry upload ke newsletter (attempt ${attempt}/${maxRetries})...`);
+            }
+
+            const result = await sock.sendMessage(jid, messageContent);
+            assertWhatsAppSendResult(result, jid, isImage ? 'image' : 'video');
+
+            // Jika berhasil (jarang terjadi), return sukses
+            return { success: true, strategy: 'newsletter-native' };
+
+        } catch (err) {
+            lastError = err;
+            const shouldRetry = err.message?.includes('upload') || err.message?.includes('media');
+            if (!shouldRetry || attempt === maxRetries) break;
+            logger.warn(`Upload attempt ${attempt} gagal: ${err.message}`);
+        }
+    }
+
+    throw lastError || new Error('Native newsletter upload failed');
 }
 
 async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
@@ -483,55 +422,94 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
     const isNewsletter = /@newsletter$/i.test(jid);
     const mimeType = mime.lookup(filePath) || 'application/octet-stream';
     const filename = path.basename(filePath);
-    const fileBuffer = await fs.readFile(filePath);
-    const fileSizeMB = fileBuffer.length / (1024 * 1024);
-    const isVideo = mimeType.startsWith('video/');
     const sourceLink = options.sourceLink || null;
+    const fileSizeMB = (await fs.stat(filePath)).size / (1024 * 1024);
 
-    logger.info(`Sending media to ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}), size: ${fileSizeMB.toFixed(2)} MB`);
+    logger.info(`Mengirim media ke ${isNewsletter ? 'newsletter' : 'chat'}: ${filename} (${mimeType}, ${fileSizeMB.toFixed(2)} MB)`);
 
-    // For newsletters, check if media type is supported
+    // ============================================================
+    // NEWSLETTER: WhatsApp error 479 memblokir semua media upload
+    // Gunakan strategi DDL (teks + link sumber) sebagai gantinya
+    // ============================================================
     if (isNewsletter) {
-        if (!isNewsletterSupportedMedia(mimeType)) {
-            logger.warn(`Media type "${mimeType}" is not supported by WhatsApp newsletters. Only images and videos are accepted.`);
+        const mode = NEWSLETTER_MEDIA_MODE;
 
-            const parts = [];
-            if (caption && caption.trim()) parts.push(caption.trim());
-            if (WHATSAPP_SEND_SOURCE_LINK && sourceLink) parts.push(`🔗 ${sourceLink}`);
-
-            const msg = parts.length > 0
-                ? `[Media tidak didukung: ${filename}]\n\n${parts.join('\n\n')}`
-                : `[Media tidak didukung: ${filename}]`;
-
-            await sendText(sock, jid, msg);
-            return { success: true, captionSent: true, strategy: 'text-only', mediaSkipped: true };
+        // Mode DDL: langsung kirim teks tanpa upload (DEFAULT)
+        if (mode === 'ddl') {
+            logger.info(`Newsletter DDL mode: mengirim teks+link (WA error 479 memblokir media upload)`);
+            const ddlMsg = buildDDLMessage(caption, sourceLink, mimeType, filename);
+            if (ddlMsg) {
+                await sendText(sock, jid, ddlMsg);
+                return { success: true, captionSent: true, strategy: 'newsletter-ddl', mediaSkipped: true };
+            }
+            logger.warn(`Newsletter DDL: tidak ada caption atau source link untuk ${filename}`);
+            return { success: true, captionSent: false, strategy: 'newsletter-ddl-empty', mediaSkipped: true };
         }
 
-        // Send image or video to newsletter
-        try {
-            return await sendImageOrVideoToNewsletter(sock, jid, fileBuffer, mimeType, caption, filename, sourceLink);
-        } catch (err) {
-            logger.error(`Failed to send media to newsletter: ${err.message}`);
-
-            // DDL fallback for videos
-            if (isVideo && VIDEO_DDL_FALLBACK && sourceLink) {
-                logger.info(`Using DDL fallback for video: ${filename}`);
-                const fallbackParts = [];
-                if (caption && caption.trim()) fallbackParts.push(caption.trim());
-                fallbackParts.push(`🎥 Video (upload gagal): ${sourceLink}`);
-                await sendText(sock, jid, fallbackParts.join('\n\n'));
-                return { success: true, captionSent: true, strategy: 'video-ddl-fallback', mediaSkipped: true };
+        // Mode TRY: coba native dulu, fallback ke DDL
+        if (mode === 'try') {
+            if (!isNewsletterSupportedMedia(mimeType)) {
+                logger.info(`Mime type ${mimeType} tidak didukung newsletter, langsung DDL`);
+                const ddlMsg = buildDDLMessage(caption, sourceLink, mimeType, filename);
+                if (ddlMsg) await sendText(sock, jid, ddlMsg);
+                return { success: true, captionSent: !!ddlMsg, strategy: 'newsletter-ddl', mediaSkipped: true };
             }
 
-            throw err;
+            const fileBuffer = await fs.readFile(filePath);
+            try {
+                logger.info(`Newsletter try-mode: mencoba native upload dulu...`);
+                await tryNativeNewsletterUpload(sock, jid, fileBuffer, mimeType, filename);
+
+                // Kirim caption jika upload berhasil
+                const captionParts = [];
+                if (caption?.trim()) captionParts.push(caption.trim());
+                if (WHATSAPP_SEND_SOURCE_LINK && sourceLink) captionParts.push(`🔗 ${sourceLink}`);
+                if (captionParts.length > 0) {
+                    await sleep(800);
+                    await sendText(sock, jid, captionParts.join('\n\n'));
+                }
+                return { success: true, captionSent: captionParts.length > 0, strategy: 'newsletter-native' };
+
+            } catch (err) {
+                logger.warn(`Native newsletter upload gagal (${err.message}), fallback ke DDL...`);
+                const ddlMsg = buildDDLMessage(caption, sourceLink, mimeType, filename);
+                if (ddlMsg) await sendText(sock, jid, ddlMsg);
+                return { success: true, captionSent: !!ddlMsg, strategy: 'newsletter-ddl-fallback', mediaSkipped: true };
+            }
         }
+
+        // Mode NATIVE: hanya coba upload (untuk debugging, akan gagal dengan error 479)
+        if (mode === 'native') {
+            logger.warn(`Newsletter native mode: mencoba upload langsung (kemungkinan besar gagal dengan error 479)`);
+            if (!isNewsletterSupportedMedia(mimeType)) {
+                throw new Error(`Mime type ${mimeType} tidak didukung newsletter`);
+            }
+            const fileBuffer = await fs.readFile(filePath);
+            await tryNativeNewsletterUpload(sock, jid, fileBuffer, mimeType, filename);
+
+            const captionParts = [];
+            if (caption?.trim()) captionParts.push(caption.trim());
+            if (WHATSAPP_SEND_SOURCE_LINK && sourceLink) captionParts.push(`🔗 ${sourceLink}`);
+            if (captionParts.length > 0) {
+                await sleep(800);
+                await sendText(sock, jid, captionParts.join('\n\n'));
+            }
+            return { success: true, captionSent: captionParts.length > 0, strategy: 'newsletter-native-forced' };
+        }
+
+        // Fallback jika mode tidak dikenal
+        logger.warn(`Mode newsletter tidak dikenal: "${mode}", menggunakan DDL`);
+        const ddlMsg = buildDDLMessage(caption, sourceLink, mimeType, filename);
+        if (ddlMsg) await sendText(sock, jid, ddlMsg);
+        return { success: true, captionSent: !!ddlMsg, strategy: 'newsletter-ddl-fallback', mediaSkipped: true };
     }
 
-    // For regular chats
+    // Regular chat: upload media normal
+    const fileBuffer = await fs.readFile(filePath);
     try {
         return await sendMediaToChat(sock, jid, fileBuffer, mimeType, filename, caption);
     } catch (err) {
-        logger.error(`Failed to send media to chat: ${err.message}`);
+        logger.error(`Gagal kirim media ke chat: ${err.message}`);
         throw err;
     }
 }
@@ -539,33 +517,20 @@ async function sendMediaFile(sock, targetId, filePath, caption, options = {}) {
 async function sendStickerFile(sock, targetId, filePath) {
     const jid = await resolveNewsletterJid(sock, targetId);
     const isNewsletter = /@newsletter$/i.test(jid);
-    const fileBuffer = await fs.readFile(filePath);
 
     if (isNewsletter) {
-        logger.info(`Sending sticker to newsletter as image: ${path.basename(filePath)}`);
-        try {
-            const result = await sock.sendMessage(jid, {
-                image: fileBuffer,
-                mimetype: 'image/webp',
-                fileLength: fileBuffer.length,
-            });
-            assertWhatsAppSendResult(result, jid, 'sticker-as-image');
-            return { success: true, strategy: 'image' };
-        } catch (err) {
-            logger.warn(`Could not send sticker to newsletter: ${err.message}`);
-            return { success: false, error: err.message };
-        }
+        // Sticker tidak didukung newsletter
+        logger.info(`Skip sticker untuk newsletter (tidak didukung)`);
+        return { success: true, strategy: 'skipped', mediaSkipped: true };
     }
 
+    const fileBuffer = await fs.readFile(filePath);
     try {
-        const result = await sock.sendMessage(jid, {
-            sticker: fileBuffer,
-            mimetype: 'image/webp',
-        });
+        const result = await sock.sendMessage(jid, { sticker: fileBuffer, mimetype: 'image/webp' });
         assertWhatsAppSendResult(result, jid, 'sticker');
         return { success: true, strategy: 'sticker' };
     } catch (err) {
-        logger.warn(`Sticker send failed, trying as image: ${err.message}`);
+        logger.warn(`Sticker gagal, coba sebagai image: ${err.message}`);
         const imageResult = await sock.sendMessage(jid, {
             image: fileBuffer,
             mimetype: 'image/webp',
@@ -584,12 +549,10 @@ async function sendMessage(sock, targetId, payload) {
 
         try {
             if (mediaType === 'sticker') {
-                const result = await sendStickerFile(sock, targetId, filePath);
+                await sendStickerFile(sock, targetId, filePath);
                 if (hasCaption) {
-                    try {
-                        await sendText(sock, targetId, text);
-                    } catch (err) {
-                        logger.warn(`Failed to send sticker caption: ${err.message}`);
+                    try { await sendText(sock, targetId, text); } catch (e) {
+                        logger.warn(`Gagal kirim caption sticker: ${e.message}`);
                     }
                 }
             } else {
@@ -603,23 +566,20 @@ async function sendMessage(sock, targetId, payload) {
 
                 if (result?.mediaSkipped) return;
 
-                // If caption was not sent with media, send separately
                 if (hasCaption && result && !result.captionSent) {
-                    try {
-                        await sendText(sock, targetId, text);
-                    } catch (err) {
-                        logger.warn(`Failed to send media caption: ${err.message}`);
+                    try { await sendText(sock, targetId, text); } catch (e) {
+                        logger.warn(`Gagal kirim caption media: ${e.message}`);
                     }
                 }
             }
         } catch (err) {
-            logger.error(`Failed to send media: ${err.message}`);
+            logger.error(`Gagal kirim media: ${err.message}`);
             if (hasCaption) {
                 try {
                     await sendText(sock, targetId, text);
-                    logger.info('Sent message text as fallback after media failure');
+                    logger.info('Teks terkirim sebagai fallback setelah media gagal');
                 } catch (textErr) {
-                    logger.error(`Failed to send text fallback: ${textErr.message}`);
+                    logger.error(`Gagal kirim teks fallback: ${textErr.message}`);
                     throw err;
                 }
             } else {
@@ -638,16 +598,14 @@ async function sendMessage(sock, targetId, payload) {
 
 async function listChats(sock) {
     const chats = [];
-
     try {
         const groups = await sock.groupFetchAllParticipating();
         for (const [jid, meta] of Object.entries(groups)) {
             chats.push({ id: jid, name: meta.subject || 'Unknown Group', type: 'group' });
         }
     } catch (err) {
-        logger.debug(`Could not fetch groups: ${err.message}`);
+        logger.debug(`Gagal fetch groups: ${err.message}`);
     }
-
     return chats;
 }
 
@@ -656,36 +614,44 @@ async function checkNewsletterAccess(sock, targetId) {
     const inviteCode = extractInviteCode(targetId);
 
     if (!/@newsletter$/i.test(normalizedId)) {
-        logger.info(`WhatsApp target is a group/chat: ${normalizedId}`);
+        logger.info(`WhatsApp target adalah group/chat: ${normalizedId}`);
         return true;
     }
 
     if (!inviteCode) {
-        logger.warn(`Cannot verify newsletter — no invite code found in: ${targetId}`);
+        logger.warn(`Tidak bisa verifikasi newsletter — tidak ada invite code di: ${targetId}`);
         return false;
     }
 
+    const mode = NEWSLETTER_MEDIA_MODE;
+    logger.info(`Newsletter mode: NEWSLETTER_MEDIA_MODE=${mode}`);
+    if (mode === 'ddl') {
+        logger.info(`  → Media akan dikirim sebagai teks + link (karena WA error 479 memblokir upload)`);
+        logger.info(`  → Untuk mencoba native upload, set NEWSLETTER_MEDIA_MODE=try di .env`);
+    } else if (mode === 'try') {
+        logger.info(`  → Akan coba upload dulu, fallback ke DDL jika error 479`);
+    } else if (mode === 'native') {
+        logger.warn(`  → NATIVE mode: upload langsung akan dicoba (kemungkinan besar gagal dengan error 479)`);
+    }
+
     if (typeof sock.newsletterMetadata !== 'function') {
-        logger.info(`newsletterMetadata not available, skipping verification for: ${inviteCode}`);
+        logger.info(`newsletterMetadata tidak tersedia, skip verifikasi`);
         return true;
     }
 
     try {
         const metadata = await sock.newsletterMetadata('invite', inviteCode);
         if (metadata) {
-            logger.info(`WhatsApp newsletter verified: "${metadata.name || inviteCode}" (${inviteCode})`);
+            logger.info(`Newsletter terverifikasi: "${metadata.name || inviteCode}" (${inviteCode})`);
             logger.info(`  Subscribers: ${metadata.subscriberCount || 'unknown'}`);
-            logger.info(`  Newsletter JID: ${metadata.id}`);
             return true;
         }
     } catch (err) {
         if (err.message?.includes('GraphQL')) {
-            logger.warn(`Could not verify newsletter ${inviteCode}: GraphQL API error`);
-            logger.warn(`  Will attempt to send messages anyway.`);
+            logger.warn(`GraphQL error verifikasi newsletter — akan tetap mencoba.`);
             return true;
-        } else {
-            logger.warn(`Could not verify newsletter ${inviteCode}: ${err.message}`);
         }
+        logger.warn(`Gagal verifikasi newsletter ${inviteCode}: ${err.message}`);
     }
 
     return false;
@@ -701,18 +667,12 @@ async function isConnectionHealthy(sock) {
 
     try {
         const ws = sock.ws || sock._ws;
-        if (ws && typeof ws.readyState === 'number') {
-            return ws.readyState === 1;
-        }
-    } catch {
-        // ignore
-    }
+        if (ws && typeof ws.readyState === 'number') return ws.readyState === 1;
+    } catch {}
 
     try {
         if (sock.user && sock.user.id) return true;
-    } catch {
-        // ignore
-    }
+    } catch {}
 
     return false;
 }
