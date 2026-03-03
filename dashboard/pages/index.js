@@ -33,23 +33,23 @@ export default function Home() {
     const [a, b, c] = await Promise.all([
       fetch('/api/public/settings').then((r) => r.json()),
       fetch('/api/public/channels').then((r) => r.json()),
-      fetch('/api/public/forwards?limit=40').then((r) => r.json()),
+      fetch('/api/public/cards?limit=40').then((r) => r.json()),
     ]);
     setSettings(a);
     setChannels(b.channels || []);
-    setItems(c.items || []);
+    setItems(c.cards || []);
     setLastUpdateAt(new Date());
     setRefreshIn(REFRESH_SECONDS);
-    if (c.items?.[0]?.createdAt) setLastSeen(c.items[0].createdAt);
+    if (c.cards?.[0]?.createdAt) setLastSeen(c.cards[0].createdAt);
   }
 
   async function refresh() {
     const since = lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : '';
-    const data = await fetch(`/api/public/forwards?limit=40${since}`).then((r) => r.json());
-    if (data.items?.length) {
-      const full = await fetch('/api/public/forwards?limit=40').then((r) => r.json());
-      setItems(full.items || []);
-      setLastSeen(full.items?.[0]?.createdAt || null);
+    const data = await fetch(`/api/public/cards?limit=40${since}`).then((r) => r.json());
+    if (data.cards?.length) {
+      const full = await fetch('/api/public/cards?limit=40').then((r) => r.json());
+      setItems(full.cards || []);
+      setLastSeen(full.cards?.[0]?.createdAt || null);
     }
     setLastUpdateAt(new Date());
     setRefreshIn(REFRESH_SECONDS);
@@ -100,14 +100,14 @@ export default function Home() {
         <div className="feed">
           {items.map((item) => {
             const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
-            const can = item.channel && item.postId;
+            const can = item.embed?.channel && item.embed?.postId;
             return (
               <article className="post" key={key}>
                 <div className="postHeader">
                   <strong>{item.channelTitle || item.channel || 'Unknown'}</strong>
                   <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
                 </div>
-                <p className="postText">{formatPreview(item.text, 220)}</p>
+                <div className="metaRow"><span className="mediaBadge">{(item.previewType || item.mediaType || 'text').toUpperCase()}</span></div><p className="postText">{formatPreview(item.caption || item.text, 220)}</p>
                 {can ? (
                   <div className="postActions">
                     <button className="btn tiny" onClick={() => setOpenEmbeds((p) => ({ ...p, [key]: !p[key] }))}>
@@ -120,7 +120,7 @@ export default function Home() {
                 )}
                 {can && openEmbeds[key] ? (
                   <div className="embedWrap">
-                    <iframe src={`https://t.me/${item.channel}/${item.postId}?embed=1&mode=tme`} title={key} loading="lazy" />
+                    <iframe src={`https://t.me/${item.embed.channel}/${item.embed.postId}?embed=1&mode=tme`} title={key} loading="lazy" />
                   </div>
                 ) : null}
               </article>

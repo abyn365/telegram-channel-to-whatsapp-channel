@@ -27,3 +27,8 @@ NEXT_TELEMETRY_DISABLED=1
 - Telegram embeds are rendered from Telegram domain (`t.me`) and cannot be deeply restyled from your CSS due cross-origin isolation.
 - Recommended approach: use your own styled preview cards (text + metadata + source link) and provide an "Open embed" action for full details.
 - If you want fully custom media cards, expand the bot storage schema to save richer media metadata (e.g., thumbnail URL, media type, dimensions) in Upstash and render that in your own UI/API.
+
+
+## Custom preview API
+- Added `GET /api/public/cards` that returns normalized card payloads (`mediaType`, `previewType`, `caption`, `sourceLink`, and embed info) for custom-themed rendering.
+- The dashboard now uses this API for shorter formatted previews and richer card metadata.

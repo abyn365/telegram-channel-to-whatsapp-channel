@@ -168,6 +168,7 @@ async function main() {
     }
 
     const processedMessages = new Set();
+    const processedGrouped = new Set();
     const MAX_PROCESSED_SIZE = 10000;
 
     const handleIncomingMessage = async (message) => {
@@ -175,19 +176,25 @@ async function main() {
             message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || ''
         );
         const dedupeKey = `${chatKey}:${message.id || ''}`;
-        
+        const groupedKey = message.groupedId ? `${chatKey}:grouped:${message.groupedId}` : null;
+
+        if (groupedKey && processedGrouped.has(groupedKey)) {
+            return;
+        }
+
         if (processedMessages.has(dedupeKey)) {
             return;
         }
         
         processedMessages.add(dedupeKey);
+        if (groupedKey) processedGrouped.add(groupedKey);
         
         // Prevent memory leak
         if (processedMessages.size > MAX_PROCESSED_SIZE) {
             const stale = [...processedMessages].slice(0, MAX_PROCESSED_SIZE / 10);
-            for (const key of stale) {
-                processedMessages.delete(key);
-            }
+            for (const key of stale) { processedMessages.delete(key); }
+            const staleGrouped = [...processedGrouped].slice(0, MAX_PROCESSED_SIZE / 10);
+            for (const key of staleGrouped) { processedGrouped.delete(key); }
         }
 
         const titleByPeer = channelTitles[chatKey] || channelTitles[`-100${chatKey}`] || '';

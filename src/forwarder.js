@@ -227,7 +227,7 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
 
         // Translation
         try {
-            const translated = await translateToIndonesian(payload.rawText || '', payload.text || '');
+            const translated = await translateToIndonesian(payload.rawText || '', '');
             if (translated) {
                 payload.text = appendTranslation(payload.text, translated);
             }
@@ -269,12 +269,16 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                 await storeForwardPreview({
                     messageKey: forwardKey,
                     messageId: message.id,
+                    groupedId: message.groupedId ? String(message.groupedId) : null,
                     channelTitle,
                     channel: channelMatch?.[1] || '',
                     postId: channelMatch?.[2] || postId,
                     text: payload.text || payload.rawText || '',
+                    rawText: payload.rawText || '',
+                    caption: payload.text || '',
                     sourceLink,
                     mediaType,
+                    previewType: (message.groupedId ? 'album' : mediaType),
                     createdAt: new Date().toISOString(),
                 });
                 

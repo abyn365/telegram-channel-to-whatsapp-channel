@@ -24,7 +24,7 @@ body{margin:0;font-family:Inter,system-ui;background:radial-gradient(circle at t
 .feed{display:grid;gap:.85rem}
 .post{background:rgba(0,0,0,.12);border:1px solid var(--line);padding:.9rem;border-radius:14px}
 .postHeader{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
-.postText{white-space:normal;line-height:1.45;margin:.55rem 0}
+.metaRow{display:flex;gap:.4rem;align-items:center;margin-top:.45rem}.mediaBadge{font-size:.72rem;padding:.2rem .55rem;border-radius:999px;background:rgba(111,141,255,.2);border:1px solid var(--line);color:var(--muted);font-weight:600;letter-spacing:.02em}.postText{white-space:normal;line-height:1.45;margin:.55rem 0}
 .postActions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap}
 .link{color:var(--accent);text-decoration:none}
 .link:hover{text-decoration:underline}
