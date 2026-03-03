@@ -11,7 +11,10 @@
     "logs:pm2": "pm2 logs tg-wa-forwarder tg-wa-translator",
     "list-chats": "node src/listChats.js",
     "follow-channel": "node src/followChannel.js",
-    "test": "echo \"No tests defined\" && exit 0"
+    "test": "echo \"No tests defined\" && exit 0",
+    "dashboard:dev": "next dev -p 8787",
+    "dashboard:build": "next build",
+    "dashboard:start": "next start -p 8787"
   },
   "repository": {
     "type": "git",
@@ -38,6 +41,9 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.33.5",
     "telegram": "^2.26.22",
-    "winston": "^3.19.0"
+    "winston": "^3.19.0",
+    "next": "^15.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   }
 }

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+export NODE_ENV="${NODE_ENV:-production}"
+
 LT_PID=""
 cleanup() {
   if [[ -n "$LT_PID" ]] && kill -0 "$LT_PID" >/dev/null 2>&1; then
