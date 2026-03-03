@@ -5,13 +5,17 @@
   "main": "src/index.js",
   "scripts": {
     "start": "bash scripts/start.sh",
-    "start:pm2": "pm2 start ecosystem.config.cjs",
-    "stop:pm2": "pm2 stop tg-wa-forwarder tg-wa-translator",
-    "restart:pm2": "pm2 restart tg-wa-forwarder tg-wa-translator",
-    "logs:pm2": "pm2 logs tg-wa-forwarder tg-wa-translator",
+    "start:pm2": "pm2 startOrReload ecosystem.config.cjs --env production",
+    "stop:pm2": "pm2 delete tg-wa-forwarder tg-wa-translator || true",
+    "restart:pm2": "pm2 restart ecosystem.config.cjs --env production",
+    "logs:pm2": "pm2 logs tg-wa-forwarder tg-wa-translator --lines 200",
     "list-chats": "node src/listChats.js",
     "follow-channel": "node src/followChannel.js",
-    "test": "echo \"No tests defined\" && exit 0"
+    "test": "echo \"No tests defined\" && exit 0",
+    "dashboard:dev": "npm --prefix dashboard run dev",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "dashboard:start": "npm --prefix dashboard run start",
+    "status:pm2": "pm2 ls"
   },
   "repository": {
     "type": "git",
