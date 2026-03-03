@@ -12,6 +12,14 @@ export const defaultSettings = {
   contact: 'admin@example.com',
   theme: 'dark',
   templates: [{ channel: 'wfwitness', postId: '74427' }],
+  ui: {
+    badgeText: 'Live Forwarding Dashboard',
+    heroSubtitle: 'Forwarded updates from Telegram channels in a cleaner feed.',
+    feedTitle: 'Forwarded Feed',
+    feedHint: 'Auto-refresh every 10 seconds. Indonesian translation is shown first when available.',
+    accentColor: '#5f7cff',
+    footerText: 'Powered by Telegram → WhatsApp Forwarder',
+  },
 };
 
 export async function getSettings() {
@@ -30,6 +38,10 @@ export async function updateSettings(patch) {
     ...current,
     ...patch,
     templates: Array.isArray(patch.templates) ? patch.templates : current.templates,
+    ui: {
+      ...current.ui,
+      ...(patch.ui || {}),
+    },
   };
 
   await kvSet(SETTINGS_KEY, JSON.stringify(next));

@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 
+function parsePriorityTranslation(text = '') {
+  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const idIndex = lines.findIndex((line) => /^id\s*:/i.test(line));
+  if (idIndex === -1) {
+    return { priority: '', original: text || '(no text)' };
+  }
+
+  const priority = lines[idIndex].replace(/^id\s*:/i, '').trim();
+  const original = lines.filter((_, index) => index !== idIndex).join('\n').trim();
+  return {
+    priority,
+    original: original || '(translation only)',
+  };
+}
+
 export default function Home() {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState([]);
@@ -21,10 +36,11 @@ export default function Home() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document.documentElement.style.setProperty('--accent', settings?.ui?.accentColor || '#5f7cff');
     if (typeof window !== 'undefined') {
       localStorage.setItem('dashboardTheme', theme);
     }
-  }, [theme]);
+  }, [theme, settings]);
 
   const loadInitial = async () => {
     const [settingsRes, channelsRes, forwardsRes] = await Promise.all([
@@ -60,17 +76,16 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [lastSeen]);
 
-  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
-
   const rows = useMemo(() => items || [], [items]);
+  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
   return (
     <main className="wrap">
       <header className="hero card">
         <div>
-          <p className="badge">Live Forwarding Dashboard</p>
+          <p className="badge">{settings?.ui?.badgeText || 'Live Forwarding Dashboard'}</p>
           <h1>{settings?.botName || 'Forward Bot'}</h1>
-          <p className="muted">{settings?.infoContent || 'Forwarded updates from Telegram channels.'}</p>
+          <p className="muted">{settings?.ui?.heroSubtitle || settings?.infoContent || 'Forwarded updates from Telegram channels.'}</p>
         </div>
         <div className="heroActions">
           <button className="btn secondary" onClick={toggleTheme}>Theme: {theme}</button>
@@ -79,25 +94,42 @@ export default function Home() {
       </header>
 
       <section className="card">
-        <h2>Channels</h2>
+        <h2>{settings?.infoTitle || 'Channels'}</h2>
         <div className="chips">{channels.map((ch) => <span key={ch}>{ch}</span>)}</div>
       </section>
 
       <section className="card">
-        <h2>Forwarded Feed</h2>
-        <p className="muted">Auto-refresh every 10 seconds. Click "Show embed" to expand Telegram preview inline.</p>
+        <h2>{settings?.ui?.feedTitle || 'Forwarded Feed'}</h2>
+        <p className="muted">{settings?.ui?.feedHint || 'Auto-refresh every 10 seconds. Indonesian translation is shown first when available.'}</p>
         <div className="feed">
           {rows.map((item) => {
             const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
             const canEmbed = item.channel && item.postId;
             const isOpen = !!openEmbeds[key];
+            const parsed = parsePriorityTranslation(item.text || '');
+
             return (
               <article key={key} className="post">
                 <div className="postHeader">
                   <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
                   <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
                 </div>
-                <p className="postText">{item.text || '(no text)'}</p>
+
+                {parsed.priority ? (
+                  <>
+                    <div className="translationBlock">
+                      <p className="translationLabel">🇮🇩 Indonesian translation</p>
+                      <p className="postText translationText">{parsed.priority}</p>
+                    </div>
+                    <details className="originalDetails">
+                      <summary>Original message</summary>
+                      <p className="postText">{parsed.original}</p>
+                    </details>
+                  </>
+                ) : (
+                  <p className="postText">{parsed.original}</p>
+                )}
+
                 {canEmbed ? (
                   <div className="postActions">
                     <button className="btn tiny" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))}>
@@ -122,6 +154,8 @@ export default function Home() {
           })}
         </div>
       </section>
+
+      <footer className="footer muted">{settings?.ui?.footerText || settings?.contact || ''}</footer>
     </main>
   );
 }
