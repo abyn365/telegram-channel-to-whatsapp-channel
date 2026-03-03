@@ -12,9 +12,9 @@
     "list-chats": "node src/listChats.js",
     "follow-channel": "node src/followChannel.js",
     "test": "echo \"No tests defined\" && exit 0",
-    "dashboard:dev": "next dev -p 8787",
-    "dashboard:build": "next build",
-    "dashboard:start": "next start -p 8787"
+    "dashboard:dev": "npm --prefix dashboard run dev",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "dashboard:start": "npm --prefix dashboard run start"
   },
   "repository": {
     "type": "git",

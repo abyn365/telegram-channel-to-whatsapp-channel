@@ -159,8 +159,6 @@ async function main() {
 
     await checkNewsletterAccess(whatsappSock, targetId);
 
-    const dashboardsrv = await startDashboardServer();
-
     for (const telegramClient of telegramClients) {
     const { channelEntities, channelTitles } = await resolveChannelEntities(telegramClient, channels);
 
@@ -244,14 +242,6 @@ async function main() {
         
         // Stop health checks
         clearInterval(healthCheckTimer);
-        
-        // Stop polling
-        try { 
-            dashboardsrv.close();
-            logger.info('Dashboard server stopped');
-        } catch (err) {
-            logger.debug(`Error stopping polling: ${err.message}`);
-        }
         
         // Disconnect Telegram
         try {

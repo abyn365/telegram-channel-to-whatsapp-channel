@@ -7,7 +7,7 @@ import { sendMessage, isConnectionHealthy, getConnectionState, getCurrentSocket 
 import { buildPayload } from './messageFormatter.js';
 import { initForwardedStore, buildForwardKey, hasForwarded, markForwarded } from './forwardedStore.js';
 import { translateToIndonesian, appendTranslation } from './translator.js';
-import { storeForwardPreview } from './dashboardServer.js';
+import { storeForwardPreview } from './previewStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

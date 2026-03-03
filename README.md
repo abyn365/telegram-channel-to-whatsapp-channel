@@ -1,89 +1,72 @@
-# Telegram → WhatsApp Forwarder + Next.js Dashboard
+# Telegram → WhatsApp Forwarder (Bot) + Separate Vercel Dashboard
 
-Forwards messages from one or more Telegram channels to a WhatsApp channel/group, and exposes a live web dashboard + admin panel.
+This repository now contains **two separate entities**:
 
-## Features
-- Telegram → WhatsApp forwarding (text, images, videos, links, polls, etc.)
-- Deduplication, retries, queue/rate control, health logging
-- Optional translation via LibreTranslate
-- Next.js dashboard with live feed, modern theme toggle, and click-to-expand Telegram embeds
-- Admin panel (JWT auth, salted password hashing)
-- Upstash Redis REST storage for settings, channels, and previews
-- Multiple Telegram account support
+1. **Forwarder bot** (root project): Telegram → WhatsApp forwarding worker.
+2. **Dashboard app** (`dashboard/`): Next.js UI/API for live feed/admin, deployable to Vercel.
 
-## Quick Start
+The bridge between them is **Upstash Redis REST**.
+
+## Architecture
+- Bot writes forwarded previews/channels/settings references to Upstash keys:
+  - `dashboard:forwards`
+  - `dashboard:channels`
+  - `dashboard:settings`
+  - `dashboard:admin`
+- Dashboard reads/writes those keys directly from Vercel serverless API routes.
+- Bot no longer depends on embedded dashboard runtime.
+
+## Bot Setup (root)
 ```bash
-git clone https://github.com/abyn365/telegram-channel-to-whatsapp-channel.git
-cd telegram-channel-to-whatsapp-channel
 npm install
 cp .env.example .env
 # edit .env
 npm start
 ```
 
-`npm start` defaults `NODE_ENV=production` for stable runtime (avoids Next dev CSP/eval issues). Use `npm run dashboard:dev` for dashboard development mode.
-
-## Required `.env`
+### Required Bot Env
 ```env
-# Default Telegram config (JSON)
 TELEGRAM_ACCOUNTS_JSON=[{"apiId":12345678,"apiHash":"abcdef1234567890abcdef1234567890","phone":"+1234567890"}]
-
 TELEGRAM_CHANNELS=@channel1,@channel2
 WHATSAPP_TARGET_ID=120363xxxxxxxxxx@newsletter
+UPSTASH_REDIS_REST_URL=https://<your-instance>.upstash.io
+UPSTASH_REDIS_REST_TOKEN=<your-token>
 ```
 
-### Multiple Telegram Accounts (JSON example)
-```env
-TELEGRAM_ACCOUNTS_JSON=[{"apiId":12345678,"apiHash":"abcdef1234567890abcdef1234567890","phone":"+1234567890"},{"apiId":87654321,"apiHash":"1234567890abcdef1234567890abcdef","phone":"+19876543210"}]
+### Forwarding Tips
+- `NEWSLETTER_MEDIA_MODE=ddl` is recommended for WhatsApp channels.
+- Valid values: `ddl`, `try`, `native` (avoid typo `hybird`).
+
+## Dashboard Setup (separate app)
+```bash
+cd dashboard
+npm install
+npm run dev
 ```
 
-### Legacy fallback (optional)
-If needed, you can still use comma-separated values:
+### Dashboard Env (Vercel)
+Set these in Vercel Project Settings → Environment Variables:
 ```env
-TELEGRAM_API_ID=12345678,87654321
-TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890,1234567890abcdef1234567890abcdef
-TELEGRAM_PHONE=+1234567890,+19876543210
-```
-
-
-**TELEGRAM_ACCOUNTS_JSON parsing note**
-- Must be valid JSON on a single line.
-- Do not append inline comments at the end of the same line.
-- If JSON is invalid and legacy vars are present, the app falls back to `TELEGRAM_API_ID/HASH/PHONE`.
-
-## Forwarding Tips
-- Use `NEWSLETTER_MEDIA_MODE=ddl` (recommended for WhatsApp channels).
-- Avoid typos like `hybird`; valid values are `ddl`, `try`, `native`.
-
-## Dashboard / Admin
-Set:
-```env
-DASHBOARD_PORT=8787
+UPSTASH_REDIS_REST_URL=https://<your-instance>.upstash.io
+UPSTASH_REDIS_REST_TOKEN=<your-token>
 JWT_SECRET=replace-with-long-random-secret
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=ChangeThisNow123!
-UPSTASH_REDIS_REST_URL=https://<your-instance>.upstash.io
-UPSTASH_REDIS_REST_TOKEN=<your-token>
 NEXT_TELEMETRY_DISABLED=1
 ```
 
-### Dashboard Commands
-```bash
-npm run dashboard:dev
-npm run dashboard:build
-npm run dashboard:start
-```
+### Deploy Dashboard to Vercel
+- Import the `dashboard/` folder as a Vercel project (or set Root Directory to `dashboard`).
+- Framework: Next.js.
+- Add env vars above.
+- Deploy.
 
-`npm start` and PM2 forwarder startup now automatically try to start the dashboard. In production, if `.next` build is missing, it auto-runs `npm run dashboard:build`. If Next.js cannot start, it falls back to the static `web/` dashboard.
+## Live Updates
+- Dashboard polls `/api/public/forwards` every 10s.
+- New forwards appear in feed quickly after bot writes to Upstash.
+- Each item shows forwarded text first, then click-to-expand Telegram embed.
 
-## WhatsApp ID Helpers
-```bash
-npm run list-chats
-npm run list-chats https://whatsapp.com/channel/<invite>
-npm run follow-channel https://whatsapp.com/channel/<invite>
-```
-
-## PM2 (Production)
+## PM2 (Bot)
 ```bash
 npm run start:pm2
 npm run logs:pm2
@@ -91,27 +74,10 @@ npm run restart:pm2
 npm run stop:pm2
 ```
 
-## Security Notes
-- Admin APIs require Bearer JWT.
-- Passwords are stored as salted hashes.
-- Security headers are applied (CSP, frame/type/referrer protections).
-- Change default admin credentials and use a strong `JWT_SECRET`.
-
-## Cloudflare Deployment (A Record + TLS)
-1. Point domain/subdomain A record to your server IP (proxied).
-2. Use Cloudflare SSL mode **Full (strict)**.
-3. Install Cloudflare Origin Certificate on your reverse proxy.
-4. Proxy `https://your-domain` → `http://127.0.0.1:DASHBOARD_PORT`.
-
 ## Common Warnings
-- `TypeError: Cannot destructure property 'subtle' of globalThis.crypto` was fixed by a webcrypto polyfill at startup (`src/webcryptoPolyfill.js`).
-- `OSError: [Errno 98] Address already in use` for LibreTranslate means port `LIBRETRANSLATE_PORT` is already occupied. This is usually not critical if translation service is already running on that port.
-- `RequestsDependencyWarning` from Python packages is non-fatal; forwarding can still run.
-- If translation shows HTTP 400, verify LibreTranslate endpoint/health (`/languages`) and language params.
-
-## Notes
-- WhatsApp channels support images/videos/text best; other types may degrade to text fallback.
-- This project uses unofficial WhatsApp Web protocol; use responsibly.
+- `OSError: [Errno 98] Address already in use` (LibreTranslate): usually means instance already running.
+- `RequestsDependencyWarning`: usually non-fatal.
+- `globalThis.crypto.subtle` issue is patched via `src/webcryptoPolyfill.js`.
 
 ## License
 GPL-3.0
