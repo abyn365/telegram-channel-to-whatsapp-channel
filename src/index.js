@@ -14,6 +14,7 @@ import {
 } from './whatsappClient.js';
 import { forwardMessage, getQueueStats } from './forwarder.js';
 import { shutdown as shutdownForwardedStore } from './forwardedStore.js';
+import { startDashboardServer } from './dashboardServer.js';
 
 // Health check interval
 const HEALTH_CHECK_INTERVAL = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS, 10) || 60000;
@@ -212,7 +213,7 @@ async function main() {
     startPollingChannels(telegramClient, channelEntities, handleIncomingMessage);
     }
 
-    logger.info('Forwarder is running. Waiting for new messages...');
+    logger.info('Forwarder + dashboard are running. Waiting for new messages...');
     logger.info('Press Ctrl+C to stop.');
 
     // Health check interval
