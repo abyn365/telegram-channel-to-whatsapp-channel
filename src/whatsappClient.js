@@ -1,3 +1,4 @@
+import './webcryptoPolyfill.js';
 import makeWASocket from '@whiskeysockets/baileys';
 import { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';

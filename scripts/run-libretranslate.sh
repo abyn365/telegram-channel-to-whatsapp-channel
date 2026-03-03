@@ -7,6 +7,32 @@ PY_BIN="${PYTHON_BIN:-python3}"
 HOST="${LIBRETRANSLATE_HOST:-127.0.0.1}"
 PORT="${LIBRETRANSLATE_PORT:-5000}"
 
+port_in_use() {
+  "$PY_BIN" - "$HOST" "$PORT" <<'PYCODE'
+import socket, sys
+host = sys.argv[1]
+port = int(sys.argv[2])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(1)
+try:
+    s.connect((host, port))
+    print('in-use')
+except Exception:
+    print('free')
+finally:
+    s.close()
+PYCODE
+}
+
+check_libretranslate_health() {
+  local health_url="http://${HOST}:${PORT}/languages"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 3 "$health_url" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
 if [[ "${TRANSLATE_TO_ID:-true}" == "false" ]]; then
   echo "[libretranslate] TRANSLATE_TO_ID=false, skipping translator service"
   exit 0
@@ -51,6 +77,16 @@ fi
 if [[ ! -x "$VENV_LT_BIN" ]]; then
   echo "[libretranslate] libretranslate binary not found, reinstalling"
   "$VENV_PIP" install --upgrade --force-reinstall libretranslate >/dev/null
+fi
+
+if [[ "$(port_in_use)" == "in-use" ]]; then
+  if check_libretranslate_health; then
+    echo "[libretranslate] Existing LibreTranslate detected on ${HOST}:${PORT}, skipping new instance"
+    exit 0
+  fi
+
+  echo "[libretranslate] ERROR: ${HOST}:${PORT} is already in use by another process"
+  exit 1
 fi
 
 echo "[libretranslate] Starting on ${HOST}:${PORT}"
