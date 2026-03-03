@@ -30,17 +30,30 @@ function validateEnvironment() {
         { key: 'WHATSAPP_TARGET_ID', validate: (v) => (v && v.trim().length > 0) || 'Must not be empty' },
     ];
 
+    const hasLegacyTelegram = Boolean(process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH && process.env.TELEGRAM_PHONE);
+
     if (process.env.TELEGRAM_ACCOUNTS_JSON) {
         try {
             const parsed = JSON.parse(process.env.TELEGRAM_ACCOUNTS_JSON);
             if (!Array.isArray(parsed) || parsed.length === 0) {
-                errors.push('TELEGRAM_ACCOUNTS_JSON must be a non-empty JSON array');
+                if (!hasLegacyTelegram) {
+                    errors.push('TELEGRAM_ACCOUNTS_JSON must be a non-empty JSON array');
+                } else {
+                    warnings.push('TELEGRAM_ACCOUNTS_JSON is empty; falling back to legacy TELEGRAM_API_ID/HASH/PHONE config.');
+                }
             }
         } catch (err) {
-            errors.push(`TELEGRAM_ACCOUNTS_JSON invalid JSON: ${err.message}`);
+            if (!hasLegacyTelegram) {
+                errors.push(`TELEGRAM_ACCOUNTS_JSON invalid JSON: ${err.message}`);
+            } else {
+                warnings.push(`TELEGRAM_ACCOUNTS_JSON invalid JSON (${err.message}); falling back to legacy TELEGRAM_API_ID/HASH/PHONE config.`);
+            }
         }
     } else {
         warnings.push('Using legacy TELEGRAM_API_ID/HASH/PHONE config. Prefer TELEGRAM_ACCOUNTS_JSON as default.');
+    }
+
+    if (!process.env.TELEGRAM_ACCOUNTS_JSON || hasLegacyTelegram) {
         required.unshift(
             { key: 'TELEGRAM_PHONE', validate: (v) => (v && String(v).split(',')[0].startsWith('+')) || 'Must start with +' },
             { key: 'TELEGRAM_API_HASH', validate: (v) => (v && String(v).split(',')[0].length === 32) || 'Must be 32 characters (first account)' },

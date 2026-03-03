@@ -43,6 +43,12 @@ TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890,1234567890abcdef1234567890abc
 TELEGRAM_PHONE=+1234567890,+19876543210
 ```
 
+
+**TELEGRAM_ACCOUNTS_JSON parsing note**
+- Must be valid JSON on a single line.
+- Do not append inline comments at the end of the same line.
+- If JSON is invalid and legacy vars are present, the app falls back to `TELEGRAM_API_ID/HASH/PHONE`.
+
 ## Dashboard / Admin
 Set:
 ```env
@@ -61,6 +67,8 @@ npm run dashboard:dev
 npm run dashboard:build
 npm run dashboard:start
 ```
+
+`npm start` and PM2 forwarder startup now automatically try to start the dashboard. In production, if `.next` build is missing, it auto-runs `npm run dashboard:build`. If Next.js cannot start, it falls back to the static `web/` dashboard.
 
 ## WhatsApp ID Helpers
 ```bash

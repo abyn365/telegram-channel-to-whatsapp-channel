@@ -48,31 +48,42 @@ async function saveSession(client, sessionFile) {
     logger.info(`Telegram session saved (${path.basename(sessionFile)}).`);
 }
 
-function getTelegramAccountConfigs() {
-    const rawJson = String(process.env.TELEGRAM_ACCOUNTS_JSON || '').trim();
-    if (rawJson) {
-        try {
-            const parsed = JSON.parse(rawJson);
-            if (!Array.isArray(parsed)) {
-                throw new Error('TELEGRAM_ACCOUNTS_JSON must be an array');
-            }
 
-            const configs = parsed
-                .map((cfg) => ({
-                    apiId: parseInt(cfg?.apiId, 10),
-                    apiHash: String(cfg?.apiHash || '').trim(),
-                    phone: String(cfg?.phone || '').trim(),
-                }))
-                .filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+function parseTelegramAccountsJson(rawJson) {
+    const trimmed = String(rawJson || '').trim();
+    if (!trimmed) return null;
 
-            if (configs.length === 0) {
-                throw new Error('TELEGRAM_ACCOUNTS_JSON contains no valid account entries');
-            }
-
-            return configs;
-        } catch (err) {
-            throw new Error(`Invalid TELEGRAM_ACCOUNTS_JSON: ${err.message}`);
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (!Array.isArray(parsed)) {
+            throw new Error('must be a JSON array');
         }
+        return parsed;
+    } catch (err) {
+        return { error: err };
+    }
+}
+
+function getTelegramAccountConfigs() {
+    const parsedJson = parseTelegramAccountsJson(process.env.TELEGRAM_ACCOUNTS_JSON);
+    if (parsedJson && !parsedJson.error) {
+        const configs = parsedJson
+            .map((cfg) => ({
+                apiId: parseInt(cfg?.apiId, 10),
+                apiHash: String(cfg?.apiHash || '').trim(),
+                phone: String(cfg?.phone || '').trim(),
+            }))
+            .filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+
+        if (configs.length > 0) {
+            return configs;
+        }
+
+        logger.warn('TELEGRAM_ACCOUNTS_JSON was provided but has no valid entries. Falling back to legacy env variables if available.');
+    }
+
+    if (parsedJson?.error) {
+        logger.warn(`Invalid TELEGRAM_ACCOUNTS_JSON (${parsedJson.error.message}). Falling back to legacy TELEGRAM_API_ID/HASH/PHONE values if available.`);
     }
 
     const ids = String(process.env.TELEGRAM_API_ID || '').split(',').map((v) => v.trim()).filter(Boolean);
