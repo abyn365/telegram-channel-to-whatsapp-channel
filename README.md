@@ -361,3 +361,44 @@ curl -X POST http://localhost:5000/translate \
 - [ ] Set appropriate `MAX_FILE_SIZE_MB` based on your needs
 - [ ] Configure `SEND_DELAY_MS` to avoid WhatsApp rate limits
 - [ ] Test with a single channel before adding multiple channels
+
+## 14 · Live Web Dashboard + Admin Panel
+
+This project now includes a built-in dashboard served by the Node process:
+
+- Public dashboard with:
+  - bot name header
+  - info popup modal
+  - dark/light theme toggle
+  - Telegram embed previews for forwarded chats
+  - auto-refresh every 10 seconds from Upstash KV/Redis data
+- Admin panel with JWT-protected API:
+  - login endpoint
+  - edit bot name/info/contact/theme/templates
+  - change admin password (salted hash)
+- Data persistence in Upstash Redis REST:
+  - `dashboard:forwards`
+  - `dashboard:channels`
+  - `dashboard:settings`
+  - `dashboard:admin`
+
+### Dashboard security notes
+
+- JWT tokens are required for `/api/admin/*` routes (except login).
+- Passwords are stored as salted hashes (scrypt-based format `salt:hash`).
+- Security headers are enabled (CSP, X-Frame-Options, nosniff, Referrer-Policy).
+- Set a strong `JWT_SECRET` and rotate `ADMIN_PASSWORD` in production.
+
+## 15 · Cloudflare deployment (A record + TLS)
+
+1. Deploy the Node app on your server (VM/container) and expose `DASHBOARD_PORT`.
+2. In Cloudflare DNS:
+   - Create an `A` record pointing your domain/subdomain to your server public IP.
+   - Enable orange-cloud proxy.
+3. In Cloudflare SSL/TLS:
+   - Set mode to **Full (strict)**.
+   - Install a Cloudflare Origin Certificate on your server reverse proxy (Nginx/Caddy/Traefik).
+4. Reverse-proxy `https://your-domain` to `http://127.0.0.1:DASHBOARD_PORT`.
+5. Keep firewall open only for 80/443 publicly; keep Node port private.
+
+This gives automatic edge TLS certs from Cloudflare + origin TLS validation.
