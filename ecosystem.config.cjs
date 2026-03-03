@@ -1,5 +1,3 @@
-const path = require('path');
-
 module.exports = {
     apps: [
         {
@@ -13,11 +11,10 @@ module.exports = {
             watch: false,
             max_memory_restart: '500M',
             restart_delay: 5000,
-            exp_backoff_restart_delay: true,
+            exp_backoff_restart_delay: 100,
             max_restarts: 10,
             kill_timeout: 5000,
-            wait_ready: true,
-            listen_timeout: 10000,
+            wait_ready: false,
             env: {
                 NODE_ENV: 'production',
             },
@@ -38,7 +35,7 @@ module.exports = {
             watch: false,
             max_memory_restart: '500M',
             restart_delay: 5000,
-            exp_backoff_restart_delay: true,
+            exp_backoff_restart_delay: 100,
             max_restarts: 10,
             kill_timeout: 10000,
             wait_ready: false,

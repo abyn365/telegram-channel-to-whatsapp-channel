@@ -69,10 +69,16 @@ NEXT_TELEMETRY_DISABLED=1
 ## PM2 (Bot)
 ```bash
 npm run start:pm2
+npm run status:pm2
 npm run logs:pm2
 npm run restart:pm2
 npm run stop:pm2
 ```
+
+Notes:
+- PM2 uses `ecosystem.config.cjs` (not `ecosystem.config.js`).
+- `start:pm2` uses `startOrReload` so app names are always synced (`tg-wa-forwarder`, `tg-wa-translator`).
+- If you only see unrelated processes (e.g. `shell-bot`), run `npm run start:pm2` in this repo directory.
 
 ## Common Warnings
 - `OSError: [Errno 98] Address already in use` (LibreTranslate): usually means instance already running.
