@@ -8,13 +8,38 @@ function authorized(req) {
   return Boolean(claims?.role === 'admin');
 }
 
+function cleanText(input, fallback = '') {
+  const value = String(input ?? fallback).trim();
+  return value.slice(0, 4000);
+}
+
+function normalizeTemplates(raw, fallback = []) {
+  if (!Array.isArray(raw)) return fallback;
+  return raw
+    .map((entry) => ({ channel: cleanText(entry?.channel, ''), postId: cleanText(entry?.postId, '') }))
+    .filter((entry) => entry.channel && entry.postId)
+    .slice(0, 100);
+}
+
+function normalizeSettings(current, payload) {
+  return {
+    ...current,
+    botName: cleanText(payload?.botName, current.botName || 'Forward Bot'),
+    infoTitle: cleanText(payload?.infoTitle, current.infoTitle || 'Sources & Admin Info'),
+    infoContent: cleanText(payload?.infoContent, current.infoContent || 'Live forwarded feed'),
+    contact: cleanText(payload?.contact, current.contact || ''),
+    theme: payload?.theme === 'light' ? 'light' : 'dark',
+    templates: normalizeTemplates(payload?.templates, current.templates || []),
+  };
+}
+
 export default async function handler(req, res) {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   try {
     if (req.method === 'GET') return res.status(200).json(await getSettings());
     if (req.method === 'PUT') {
       const current = await getSettings();
-      const next = { ...current, ...(req.body || {}), templates: Array.isArray(req.body?.templates) ? req.body.templates : current.templates };
+      const next = normalizeSettings(current, req.body || {});
       await setSettings(next);
       return res.status(200).json(next);
     }
