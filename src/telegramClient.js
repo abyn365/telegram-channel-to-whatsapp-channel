@@ -49,8 +49,30 @@ async function saveSession(client, sessionFile) {
 }
 
 function getTelegramAccountConfigs() {
-    if (process.env.TELEGRAM_ACCOUNTS_JSON) {
-        return JSON.parse(process.env.TELEGRAM_ACCOUNTS_JSON);
+    const rawJson = String(process.env.TELEGRAM_ACCOUNTS_JSON || '').trim();
+    if (rawJson) {
+        try {
+            const parsed = JSON.parse(rawJson);
+            if (!Array.isArray(parsed)) {
+                throw new Error('TELEGRAM_ACCOUNTS_JSON must be an array');
+            }
+
+            const configs = parsed
+                .map((cfg) => ({
+                    apiId: parseInt(cfg?.apiId, 10),
+                    apiHash: String(cfg?.apiHash || '').trim(),
+                    phone: String(cfg?.phone || '').trim(),
+                }))
+                .filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+
+            if (configs.length === 0) {
+                throw new Error('TELEGRAM_ACCOUNTS_JSON contains no valid account entries');
+            }
+
+            return configs;
+        } catch (err) {
+            throw new Error(`Invalid TELEGRAM_ACCOUNTS_JSON: ${err.message}`);
+        }
     }
 
     const ids = String(process.env.TELEGRAM_API_ID || '').split(',').map((v) => v.trim()).filter(Boolean);
@@ -62,7 +84,12 @@ function getTelegramAccountConfigs() {
     for (let i = 0; i < count; i++) {
         configs.push({ apiId: parseInt(ids[i], 10), apiHash: hashes[i], phone: phones[i] });
     }
-    return configs.filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+
+    const valid = configs.filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+    if (valid.length > 0) {
+        logger.warn('Using legacy TELEGRAM_API_ID/TELEGRAM_API_HASH/TELEGRAM_PHONE format. Prefer TELEGRAM_ACCOUNTS_JSON.');
+    }
+    return valid;
 }
 
 async function createTelegramClient(accountConfig, accountIndex = 0) {

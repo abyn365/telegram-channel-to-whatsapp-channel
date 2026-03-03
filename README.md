@@ -23,17 +23,24 @@ npm start
 
 ## Required `.env`
 ```env
-TELEGRAM_API_ID=12345678
-TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890
-TELEGRAM_PHONE=+1234567890
+# Default Telegram config (JSON)
+TELEGRAM_ACCOUNTS_JSON=[{"apiId":12345678,"apiHash":"abcdef1234567890abcdef1234567890","phone":"+1234567890"}]
+
 TELEGRAM_CHANNELS=@channel1,@channel2
 WHATSAPP_TARGET_ID=120363xxxxxxxxxx@newsletter
 ```
 
-### Multiple Telegram Accounts
-Use either comma-separated values in `TELEGRAM_API_ID/HASH/PHONE` or:
+### Multiple Telegram Accounts (JSON example)
 ```env
-TELEGRAM_ACCOUNTS_JSON=[{"apiId":12345678,"apiHash":"abcdef1234567890abcdef1234567890","phone":"+1234567890"}]
+TELEGRAM_ACCOUNTS_JSON=[{"apiId":12345678,"apiHash":"abcdef1234567890abcdef1234567890","phone":"+1234567890"},{"apiId":87654321,"apiHash":"1234567890abcdef1234567890abcdef","phone":"+19876543210"}]
+```
+
+### Legacy fallback (optional)
+If needed, you can still use comma-separated values:
+```env
+TELEGRAM_API_ID=12345678,87654321
+TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890,1234567890abcdef1234567890abcdef
+TELEGRAM_PHONE=+1234567890,+19876543210
 ```
 
 ## Dashboard / Admin
