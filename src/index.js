@@ -214,7 +214,7 @@ async function main() {
     // Health check interval
     const healthCheckTimer = setInterval(async () => {
         const tgConnected = telegramClients.every((client) => client.connected);
-        const waHealthy = await isConnectionHealthy(whatsappSock);
+        const waHealthy = await isConnectionHealthy();
         const queueStats = getQueueStats();
 
         const status = `Telegram=${tgConnected ? 'OK' : 'DISCONNECTED'}, WhatsApp=${waHealthy ? 'OK' : 'UNHEALTHY'}, Queue=${queueStats.pending} pending, ${queueStats.processed} processed, ${queueStats.failed} failed`;

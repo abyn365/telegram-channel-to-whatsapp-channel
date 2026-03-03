@@ -5,11 +5,25 @@ export default function Home() {
   const [channels, setChannels] = useState([]);
   const [items, setItems] = useState([]);
   const [lastSeen, setLastSeen] = useState(null);
+  const [openEmbeds, setOpenEmbeds] = useState({});
+  const [theme, setTheme] = useState('dark');
 
-  const theme = settings?.theme || 'dark';
+  useEffect(() => {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('dashboardTheme') : null;
+    if (stored) setTheme(stored);
+  }, []);
+
+  useEffect(() => {
+    if (settings?.theme && !localStorage.getItem('dashboardTheme')) {
+      setTheme(settings.theme);
+    }
+  }, [settings]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('dashboardTheme', theme);
+    }
   }, [theme]);
 
   const loadInitial = async () => {
@@ -26,14 +40,12 @@ export default function Home() {
     setSettings(settingsData);
     setChannels(channelsData.channels || []);
     setItems(forwardsData.items || []);
-    if (forwardsData.items?.[0]?.createdAt) {
-      setLastSeen(forwardsData.items[0].createdAt);
-    }
+    if (forwardsData.items?.[0]?.createdAt) setLastSeen(forwardsData.items[0].createdAt);
   };
 
   const refresh = async () => {
-    const url = `/api/public/forwards?limit=40${lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : ''}`;
-    const res = await fetch(url);
+    const since = lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : '';
+    const res = await fetch(`/api/public/forwards?limit=40${since}`);
     const data = await res.json();
     if (!data.items?.length) return;
 
@@ -48,22 +60,23 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [lastSeen]);
 
-  const embedRows = useMemo(() => items.filter((it) => it.channel && it.postId), [items]);
+  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+
+  const rows = useMemo(() => items || [], [items]);
 
   return (
     <main className="wrap">
-      <header className="topbar">
-        <h1>{settings?.botName || 'Forward Bot'}</h1>
-        <div className="buttons">
+      <header className="hero card">
+        <div>
+          <p className="badge">Live Forwarding Dashboard</p>
+          <h1>{settings?.botName || 'Forward Bot'}</h1>
+          <p className="muted">{settings?.infoContent || 'Forwarded updates from Telegram channels.'}</p>
+        </div>
+        <div className="heroActions">
+          <button className="btn secondary" onClick={toggleTheme}>Theme: {theme}</button>
           <a href="/admin" className="btn">Admin</a>
         </div>
       </header>
-
-      <section className="card">
-        <h2>{settings?.infoTitle || 'Info'}</h2>
-        <p>{settings?.infoContent}</p>
-        <p className="muted">Contact: {settings?.contact || '-'}</p>
-      </section>
 
       <section className="card">
         <h2>Channels</h2>
@@ -71,43 +84,44 @@ export default function Home() {
       </section>
 
       <section className="card">
-        <h2>Live Telegram Preview</h2>
-        <p className="muted">Auto-refresh every 10 seconds from Upstash KV/Redis.</p>
-
+        <h2>Forwarded Feed</h2>
+        <p className="muted">Auto-refresh every 10 seconds. Click "Show embed" to expand Telegram preview inline.</p>
         <div className="feed">
-          {items.map((item) => (
-            <article key={item.messageKey || `${item.createdAt}-${item.messageId || Math.random()}`} className="post">
-              <p><strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong> · {new Date(item.createdAt).toLocaleString()}</p>
-              <p>{item.text || ''}</p>
-            </article>
-          ))}
-        </div>
+          {rows.map((item) => {
+            const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
+            const canEmbed = item.channel && item.postId;
+            const isOpen = !!openEmbeds[key];
+            return (
+              <article key={key} className="post">
+                <div className="postHeader">
+                  <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
+                  <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
+                </div>
+                <p className="postText">{item.text || '(no text)'}</p>
+                {canEmbed ? (
+                  <div className="postActions">
+                    <button className="btn tiny" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))}>
+                      {isOpen ? 'Hide embed' : 'Show embed'}
+                    </button>
+                    {item.sourceLink ? <a className="link" href={item.sourceLink} target="_blank" rel="noreferrer">Open source</a> : null}
+                  </div>
+                ) : null}
 
-        <div className="feed">
-          {embedRows.map((item) => (
-            <TelegramEmbed key={`embed-${item.messageKey}`} channel={item.channel} postId={item.postId} />
-          ))}
+                {isOpen && canEmbed ? (
+                  <div className="embedWrap">
+                    <iframe
+                      title={`telegram-${key}`}
+                      src={`https://t.me/${item.channel}/${item.postId}?embed=1&mode=tme`}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       </section>
     </main>
-  );
-}
-
-function TelegramEmbed({ channel, postId }) {
-  useEffect(() => {
-    if (!window.Telegram?.Post) {
-      const script = document.createElement('script');
-      script.src = 'https://telegram.org/js/telegram-widget.js?23';
-      script.async = true;
-      document.body.appendChild(script);
-    }
-  }, []);
-
-  return (
-    <blockquote
-      className="telegram-post"
-      data-telegram-post={`${channel}/${postId}`}
-      data-width="100%"
-    />
   );
 }

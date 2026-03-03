@@ -6,7 +6,7 @@ Forwards messages from one or more Telegram channels to a WhatsApp channel/group
 - Telegram → WhatsApp forwarding (text, images, videos, links, polls, etc.)
 - Deduplication, retries, queue/rate control, health logging
 - Optional translation via LibreTranslate
-- Next.js dashboard with live feed + Telegram embeds
+- Next.js dashboard with live feed, modern theme toggle, and click-to-expand Telegram embeds
 - Admin panel (JWT auth, salted password hashing)
 - Upstash Redis REST storage for settings, channels, and previews
 - Multiple Telegram account support
@@ -50,6 +50,10 @@ TELEGRAM_PHONE=+1234567890,+19876543210
 - Must be valid JSON on a single line.
 - Do not append inline comments at the end of the same line.
 - If JSON is invalid and legacy vars are present, the app falls back to `TELEGRAM_API_ID/HASH/PHONE`.
+
+## Forwarding Tips
+- Use `NEWSLETTER_MEDIA_MODE=ddl` (recommended for WhatsApp channels).
+- Avoid typos like `hybird`; valid values are `ddl`, `try`, `native`.
 
 ## Dashboard / Admin
 Set:

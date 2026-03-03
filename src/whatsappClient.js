@@ -157,6 +157,8 @@ async function createWhatsAppClient(onReconnect) {
             reject(new Error('WhatsApp connection timed out after 5 minutes'));
         }, 300_000);
 
+        let hasOpened = false;
+
         sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
             if (qr) {
                 logger.info('WhatsApp QR code — scan dengan HP kamu:');
@@ -166,20 +168,23 @@ async function createWhatsAppClient(onReconnect) {
 
             if (connection === 'open') {
                 clearTimeout(timeout);
+                hasOpened = true;
                 _isConnected = true;
                 _reconnectAttempts = 0;
                 _currentSocket = sock;
                 logger.info('WhatsApp terhubung via Baileys (WebSocket).');
                 resolve();
+                return;
             }
 
             if (connection === 'close') {
-                _isConnected = false;
-                _currentSocket = null;
                 const statusCode = lastDisconnect?.error instanceof Boom
                     ? lastDisconnect.error.output?.statusCode
                     : null;
                 const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+                _isConnected = false;
+                _currentSocket = null;
 
                 if (loggedOut) {
                     clearTimeout(timeout);
@@ -190,16 +195,18 @@ async function createWhatsAppClient(onReconnect) {
                     return;
                 }
 
-                if (!_isConnected) {
+                if (!hasOpened) {
                     clearTimeout(timeout);
-                    const error = new Error(`WhatsApp connection closed: ${statusCode}`);
+                    const error = new Error(`WhatsApp connection closed before ready: ${statusCode}`);
                     error.statusCode = statusCode;
                     reject(error);
                     return;
                 }
 
                 logger.warn(`WhatsApp terputus (kode ${statusCode}). Akan reconnect...`);
-                if (typeof onReconnect === 'function') onReconnect();
+                if (typeof onReconnect === 'function') {
+                    onReconnect().catch((err) => logger.error(`Reconnect error: ${err.message}`));
+                }
             }
         });
 
