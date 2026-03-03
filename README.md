@@ -21,6 +21,8 @@ cp .env.example .env
 npm start
 ```
 
+`npm start` defaults `NODE_ENV=production` for stable runtime (avoids Next dev CSP/eval issues). Use `npm run dashboard:dev` for dashboard development mode.
+
 ## Required `.env`
 ```env
 # Default Telegram config (JSON)
@@ -98,6 +100,7 @@ npm run stop:pm2
 4. Proxy `https://your-domain` → `http://127.0.0.1:DASHBOARD_PORT`.
 
 ## Common Warnings
+- `TypeError: Cannot destructure property 'subtle' of globalThis.crypto` was fixed by a webcrypto polyfill at startup (`src/webcryptoPolyfill.js`).
 - `OSError: [Errno 98] Address already in use` for LibreTranslate means port `LIBRETRANSLATE_PORT` is already occupied. This is usually not critical if translation service is already running on that port.
 - `RequestsDependencyWarning` from Python packages is non-fatal; forwarding can still run.
 - If translation shows HTTP 400, verify LibreTranslate endpoint/health (`/languages`) and language params.

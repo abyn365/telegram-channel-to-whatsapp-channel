@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
 
+const isProd = process.env.NODE_ENV === 'production';
+const scriptSrc = isProd
+  ? "script-src 'self' 'unsafe-inline' https://telegram.org;"
+  : "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org;";
+
 export function middleware(req) {
   const response = NextResponse.next();
   response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -7,7 +12,7 @@ export function middleware(req) {
   response.headers.set('Referrer-Policy', 'no-referrer');
   response.headers.set(
     'Content-Security-Policy',
-    "default-src 'self' https://telegram.org; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; frame-src https://t.me https://telegram.org;"
+    `default-src 'self' https://telegram.org; ${scriptSrc} style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; frame-src https://t.me https://telegram.org;`
   );
   return response;
 }
