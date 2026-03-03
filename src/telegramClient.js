@@ -12,7 +12,7 @@ import logger from './logger.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SESSION_FILE = path.join(__dirname, '../sessions/telegram.session');
+const SESSIONS_DIR = path.join(__dirname, '../sessions');
 
 // Track download progress for large files
 const downloadProgressCallbacks = new Map();
@@ -27,35 +27,93 @@ async function promptInput(question) {
     });
 }
 
-async function loadSession() {
+function buildSessionFile(accountIndex = 0) {
+    return path.join(SESSIONS_DIR, `telegram.${accountIndex}.session`);
+}
+
+async function loadSession(sessionFile) {
     try {
-        if (await fs.pathExists(SESSION_FILE)) {
-            const data = await fs.readFile(SESSION_FILE, 'utf-8');
+        if (await fs.pathExists(sessionFile)) {
+            const data = await fs.readFile(sessionFile, 'utf-8');
             return new StringSession(data.trim());
         }
-    } catch {
-        // ignore
-    }
+    } catch {}
     return new StringSession('');
 }
 
-async function saveSession(client) {
+async function saveSession(client, sessionFile) {
     const sessionStr = client.session.save();
-    await fs.ensureDir(path.dirname(SESSION_FILE));
-    await fs.writeFile(SESSION_FILE, sessionStr, 'utf-8');
-    logger.info('Telegram session saved.');
+    await fs.ensureDir(path.dirname(sessionFile));
+    await fs.writeFile(sessionFile, sessionStr, 'utf-8');
+    logger.info(`Telegram session saved (${path.basename(sessionFile)}).`);
 }
 
-async function createTelegramClient() {
-    const apiId = parseInt(process.env.TELEGRAM_API_ID, 10);
-    const apiHash = process.env.TELEGRAM_API_HASH;
-    const phone = process.env.TELEGRAM_PHONE;
 
-    if (!apiId || !apiHash || !phone) {
-        throw new Error('TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_PHONE must be set in .env');
+function parseTelegramAccountsJson(rawJson) {
+    const trimmed = String(rawJson || '').trim();
+    if (!trimmed) return null;
+
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (!Array.isArray(parsed)) {
+            throw new Error('must be a JSON array');
+        }
+        return parsed;
+    } catch (err) {
+        return { error: err };
+    }
+}
+
+function getTelegramAccountConfigs() {
+    const parsedJson = parseTelegramAccountsJson(process.env.TELEGRAM_ACCOUNTS_JSON);
+    if (parsedJson && !parsedJson.error) {
+        const configs = parsedJson
+            .map((cfg) => ({
+                apiId: parseInt(cfg?.apiId, 10),
+                apiHash: String(cfg?.apiHash || '').trim(),
+                phone: String(cfg?.phone || '').trim(),
+            }))
+            .filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+
+        if (configs.length > 0) {
+            return configs;
+        }
+
+        logger.warn('TELEGRAM_ACCOUNTS_JSON was provided but has no valid entries. Falling back to legacy env variables if available.');
     }
 
-    const session = await loadSession();
+    if (parsedJson?.error) {
+        logger.warn(`Invalid TELEGRAM_ACCOUNTS_JSON (${parsedJson.error.message}). Falling back to legacy TELEGRAM_API_ID/HASH/PHONE values if available.`);
+    }
+
+    const ids = String(process.env.TELEGRAM_API_ID || '').split(',').map((v) => v.trim()).filter(Boolean);
+    const hashes = String(process.env.TELEGRAM_API_HASH || '').split(',').map((v) => v.trim()).filter(Boolean);
+    const phones = String(process.env.TELEGRAM_PHONE || '').split(',').map((v) => v.trim()).filter(Boolean);
+
+    const count = Math.max(ids.length, hashes.length, phones.length);
+    const configs = [];
+    for (let i = 0; i < count; i++) {
+        configs.push({ apiId: parseInt(ids[i], 10), apiHash: hashes[i], phone: phones[i] });
+    }
+
+    const valid = configs.filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+    if (valid.length > 0) {
+        logger.warn('Using legacy TELEGRAM_API_ID/TELEGRAM_API_HASH/TELEGRAM_PHONE format. Prefer TELEGRAM_ACCOUNTS_JSON.');
+    }
+    return valid;
+}
+
+async function createTelegramClient(accountConfig, accountIndex = 0) {
+    const apiId = parseInt(accountConfig.apiId, 10);
+    const apiHash = accountConfig.apiHash;
+    const phone = accountConfig.phone;
+
+    if (!apiId || !apiHash || !phone) {
+        throw new Error('Telegram account config missing apiId/apiHash/phone');
+    }
+
+    const sessionFile = buildSessionFile(accountIndex);
+    const session = await loadSession(sessionFile);
     const client = new TelegramClient(session, apiId, apiHash, {
         connectionRetries: 10,
         retryDelay: 3000,
@@ -72,7 +130,7 @@ async function createTelegramClient() {
         onError: (err) => logger.error('Telegram auth error:', err),
     });
 
-    await saveSession(client);
+    await saveSession(client, sessionFile);
     logger.info('Telegram userbot connected successfully.');
     
     // Log some info about the connected user
@@ -84,6 +142,19 @@ async function createTelegramClient() {
     }
     
     return client;
+}
+
+async function createTelegramClients() {
+    const configs = getTelegramAccountConfigs();
+    if (configs.length === 0) {
+        throw new Error('No valid Telegram account configs found.');
+    }
+
+    const clients = [];
+    for (let i = 0; i < configs.length; i++) {
+        clients.push(await createTelegramClient(configs[i], i));
+    }
+    return clients;
 }
 
 function resolveChannelTargets(raw) {
@@ -523,6 +594,7 @@ function startPollingChannels(client, channelFilters, onMessage) {
 
 export {
     createTelegramClient,
+    createTelegramClients,
     resolveChannelTargets,
     resolveChannelEntities,
     downloadMedia,
