@@ -12,7 +12,7 @@ import logger from './logger.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SESSION_FILE = path.join(__dirname, '../sessions/telegram.session');
+const SESSIONS_DIR = path.join(__dirname, '../sessions');
 
 // Track download progress for large files
 const downloadProgressCallbacks = new Map();
@@ -27,35 +27,55 @@ async function promptInput(question) {
     });
 }
 
-async function loadSession() {
+function buildSessionFile(accountIndex = 0) {
+    return path.join(SESSIONS_DIR, `telegram.${accountIndex}.session`);
+}
+
+async function loadSession(sessionFile) {
     try {
-        if (await fs.pathExists(SESSION_FILE)) {
-            const data = await fs.readFile(SESSION_FILE, 'utf-8');
+        if (await fs.pathExists(sessionFile)) {
+            const data = await fs.readFile(sessionFile, 'utf-8');
             return new StringSession(data.trim());
         }
-    } catch {
-        // ignore
-    }
+    } catch {}
     return new StringSession('');
 }
 
-async function saveSession(client) {
+async function saveSession(client, sessionFile) {
     const sessionStr = client.session.save();
-    await fs.ensureDir(path.dirname(SESSION_FILE));
-    await fs.writeFile(SESSION_FILE, sessionStr, 'utf-8');
-    logger.info('Telegram session saved.');
+    await fs.ensureDir(path.dirname(sessionFile));
+    await fs.writeFile(sessionFile, sessionStr, 'utf-8');
+    logger.info(`Telegram session saved (${path.basename(sessionFile)}).`);
 }
 
-async function createTelegramClient() {
-    const apiId = parseInt(process.env.TELEGRAM_API_ID, 10);
-    const apiHash = process.env.TELEGRAM_API_HASH;
-    const phone = process.env.TELEGRAM_PHONE;
-
-    if (!apiId || !apiHash || !phone) {
-        throw new Error('TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_PHONE must be set in .env');
+function getTelegramAccountConfigs() {
+    if (process.env.TELEGRAM_ACCOUNTS_JSON) {
+        return JSON.parse(process.env.TELEGRAM_ACCOUNTS_JSON);
     }
 
-    const session = await loadSession();
+    const ids = String(process.env.TELEGRAM_API_ID || '').split(',').map((v) => v.trim()).filter(Boolean);
+    const hashes = String(process.env.TELEGRAM_API_HASH || '').split(',').map((v) => v.trim()).filter(Boolean);
+    const phones = String(process.env.TELEGRAM_PHONE || '').split(',').map((v) => v.trim()).filter(Boolean);
+
+    const count = Math.max(ids.length, hashes.length, phones.length);
+    const configs = [];
+    for (let i = 0; i < count; i++) {
+        configs.push({ apiId: parseInt(ids[i], 10), apiHash: hashes[i], phone: phones[i] });
+    }
+    return configs.filter((cfg) => cfg.apiId && cfg.apiHash && cfg.phone);
+}
+
+async function createTelegramClient(accountConfig, accountIndex = 0) {
+    const apiId = parseInt(accountConfig.apiId, 10);
+    const apiHash = accountConfig.apiHash;
+    const phone = accountConfig.phone;
+
+    if (!apiId || !apiHash || !phone) {
+        throw new Error('Telegram account config missing apiId/apiHash/phone');
+    }
+
+    const sessionFile = buildSessionFile(accountIndex);
+    const session = await loadSession(sessionFile);
     const client = new TelegramClient(session, apiId, apiHash, {
         connectionRetries: 10,
         retryDelay: 3000,
@@ -72,7 +92,7 @@ async function createTelegramClient() {
         onError: (err) => logger.error('Telegram auth error:', err),
     });
 
-    await saveSession(client);
+    await saveSession(client, sessionFile);
     logger.info('Telegram userbot connected successfully.');
     
     // Log some info about the connected user
@@ -84,6 +104,19 @@ async function createTelegramClient() {
     }
     
     return client;
+}
+
+async function createTelegramClients() {
+    const configs = getTelegramAccountConfigs();
+    if (configs.length === 0) {
+        throw new Error('No valid Telegram account configs found.');
+    }
+
+    const clients = [];
+    for (let i = 0; i < configs.length; i++) {
+        clients.push(await createTelegramClient(configs[i], i));
+    }
+    return clients;
 }
 
 function resolveChannelTargets(raw) {
@@ -523,6 +556,7 @@ function startPollingChannels(client, channelFilters, onMessage) {
 
 export {
     createTelegramClient,
+    createTelegramClients,
     resolveChannelTargets,
     resolveChannelEntities,
     downloadMedia,
