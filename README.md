@@ -362,9 +362,9 @@ curl -X POST http://localhost:5000/translate \
 - [ ] Configure `SEND_DELAY_MS` to avoid WhatsApp rate limits
 - [ ] Test with a single channel before adding multiple channels
 
-## 14 · Live Web Dashboard + Admin Panel
+## 14 · Live Web Dashboard + Admin Panel (Next.js)
 
-This project now includes a built-in dashboard served by the Node process:
+This project now includes a Next.js dashboard served by the Node process (`startDashboardServer`) or standalone via Next scripts:
 
 - Public dashboard with:
   - bot name header
@@ -382,6 +382,12 @@ This project now includes a built-in dashboard served by the Node process:
   - `dashboard:settings`
   - `dashboard:admin`
 
+
+```bash
+npm run dashboard:dev
+npm run dashboard:build
+npm run dashboard:start
+```
 ### Dashboard security notes
 
 - JWT tokens are required for `/api/admin/*` routes (except login).
