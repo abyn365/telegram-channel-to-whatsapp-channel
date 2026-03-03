@@ -97,6 +97,11 @@ npm run stop:pm2
 3. Install Cloudflare Origin Certificate on your reverse proxy.
 4. Proxy `https://your-domain` → `http://127.0.0.1:DASHBOARD_PORT`.
 
+## Common Warnings
+- `OSError: [Errno 98] Address already in use` for LibreTranslate means port `LIBRETRANSLATE_PORT` is already occupied. This is usually not critical if translation service is already running on that port.
+- `RequestsDependencyWarning` from Python packages is non-fatal; forwarding can still run.
+- If translation shows HTTP 400, verify LibreTranslate endpoint/health (`/languages`) and language params.
+
 ## Notes
 - WhatsApp channels support images/videos/text best; other types may degrade to text fallback.
 - This project uses unofficial WhatsApp Web protocol; use responsibly.
