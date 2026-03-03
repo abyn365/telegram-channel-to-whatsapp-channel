@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import logger from './logger.js';
 import {
-    createTelegramClient,
+    createTelegramClients,
     resolveChannelTargets,
     resolveChannelEntities,
     startListener,
@@ -25,12 +25,40 @@ function validateEnvironment() {
     
     // Required variables
     const required = [
-        { key: 'TELEGRAM_API_ID', validate: (v) => !isNaN(parseInt(v)) || 'Must be a number' },
-        { key: 'TELEGRAM_API_HASH', validate: (v) => (v && v.length === 32) || 'Must be 32 characters' },
-        { key: 'TELEGRAM_PHONE', validate: (v) => (v && v.startsWith('+')) || 'Must start with +' },
         { key: 'TELEGRAM_CHANNELS', validate: (v) => (v && v.trim().length > 0) || 'Must not be empty' },
         { key: 'WHATSAPP_TARGET_ID', validate: (v) => (v && v.trim().length > 0) || 'Must not be empty' },
     ];
+
+    const hasLegacyTelegram = Boolean(process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH && process.env.TELEGRAM_PHONE);
+
+    if (process.env.TELEGRAM_ACCOUNTS_JSON) {
+        try {
+            const parsed = JSON.parse(process.env.TELEGRAM_ACCOUNTS_JSON);
+            if (!Array.isArray(parsed) || parsed.length === 0) {
+                if (!hasLegacyTelegram) {
+                    errors.push('TELEGRAM_ACCOUNTS_JSON must be a non-empty JSON array');
+                } else {
+                    warnings.push('TELEGRAM_ACCOUNTS_JSON is empty; falling back to legacy TELEGRAM_API_ID/HASH/PHONE config.');
+                }
+            }
+        } catch (err) {
+            if (!hasLegacyTelegram) {
+                errors.push(`TELEGRAM_ACCOUNTS_JSON invalid JSON: ${err.message}`);
+            } else {
+                warnings.push(`TELEGRAM_ACCOUNTS_JSON invalid JSON (${err.message}); falling back to legacy TELEGRAM_API_ID/HASH/PHONE config.`);
+            }
+        }
+    } else {
+        warnings.push('Using legacy TELEGRAM_API_ID/HASH/PHONE config. Prefer TELEGRAM_ACCOUNTS_JSON as default.');
+    }
+
+    if (!process.env.TELEGRAM_ACCOUNTS_JSON || hasLegacyTelegram) {
+        required.unshift(
+            { key: 'TELEGRAM_PHONE', validate: (v) => (v && String(v).split(',')[0].startsWith('+')) || 'Must start with +' },
+            { key: 'TELEGRAM_API_HASH', validate: (v) => (v && String(v).split(',')[0].length === 32) || 'Must be 32 characters (first account)' },
+            { key: 'TELEGRAM_API_ID', validate: (v) => !isNaN(parseInt(String(v).split(',')[0])) || 'Must be a number' },
+        );
+    }
     
     for (const { key, validate } of required) {
         const value = process.env[key];
@@ -123,13 +151,14 @@ async function main() {
     const channels = resolveChannelTargets(rawChannels);
 
     logger.info('Connecting to Telegram...');
-    const telegramClient = await createTelegramClient();
+    const telegramClients = await createTelegramClients();
 
     logger.info('Connecting to WhatsApp (WebSocket — no browser required)...');
     const whatsappSock = await createWhatsAppClientWithReconnect();
 
     await checkNewsletterAccess(whatsappSock, targetId);
 
+    for (const telegramClient of telegramClients) {
     const { channelEntities, channelTitles } = await resolveChannelEntities(telegramClient, channels);
 
     for (const ch of channels) {
@@ -138,6 +167,7 @@ async function main() {
     }
 
     const processedMessages = new Set();
+    const processedGrouped = new Set();
     const MAX_PROCESSED_SIZE = 10000;
 
     const handleIncomingMessage = async (message) => {
@@ -145,19 +175,25 @@ async function main() {
             message.peerId?.channelId || message.peerId?.chatId || message.peerId?.userId || ''
         );
         const dedupeKey = `${chatKey}:${message.id || ''}`;
-        
+        const groupedKey = message.groupedId ? `${chatKey}:grouped:${message.groupedId}` : null;
+
+        if (groupedKey && processedGrouped.has(groupedKey)) {
+            return;
+        }
+
         if (processedMessages.has(dedupeKey)) {
             return;
         }
         
         processedMessages.add(dedupeKey);
+        if (groupedKey) processedGrouped.add(groupedKey);
         
         // Prevent memory leak
         if (processedMessages.size > MAX_PROCESSED_SIZE) {
             const stale = [...processedMessages].slice(0, MAX_PROCESSED_SIZE / 10);
-            for (const key of stale) {
-                processedMessages.delete(key);
-            }
+            for (const key of stale) { processedMessages.delete(key); }
+            const staleGrouped = [...processedGrouped].slice(0, MAX_PROCESSED_SIZE / 10);
+            for (const key of staleGrouped) { processedGrouped.delete(key); }
         }
 
         const titleByPeer = channelTitles[chatKey] || channelTitles[`-100${chatKey}`] || '';
@@ -173,15 +209,16 @@ async function main() {
     };
 
     startListener(telegramClient, channelEntities, handleIncomingMessage);
-    const stopPolling = startPollingChannels(telegramClient, channelEntities, handleIncomingMessage);
+    startPollingChannels(telegramClient, channelEntities, handleIncomingMessage);
+    }
 
     logger.info('Forwarder is running. Waiting for new messages...');
     logger.info('Press Ctrl+C to stop.');
 
     // Health check interval
     const healthCheckTimer = setInterval(async () => {
-        const tgConnected = telegramClient.connected;
-        const waHealthy = await isConnectionHealthy(whatsappSock);
+        const tgConnected = telegramClients.every((client) => client.connected);
+        const waHealthy = await isConnectionHealthy();
         const queueStats = getQueueStats();
 
         const status = `Telegram=${tgConnected ? 'OK' : 'DISCONNECTED'}, WhatsApp=${waHealthy ? 'OK' : 'UNHEALTHY'}, Queue=${queueStats.pending} pending, ${queueStats.processed} processed, ${queueStats.failed} failed`;
@@ -212,17 +249,9 @@ async function main() {
         // Stop health checks
         clearInterval(healthCheckTimer);
         
-        // Stop polling
-        try { 
-            stopPolling(); 
-            logger.info('Telegram polling stopped');
-        } catch (err) {
-            logger.debug(`Error stopping polling: ${err.message}`);
-        }
-        
         // Disconnect Telegram
-        try { 
-            await telegramClient.disconnect(); 
+        try {
+            await Promise.all(telegramClients.map((client) => client.disconnect()));
             logger.info('Telegram disconnected');
         } catch (err) {
             logger.debug(`Error disconnecting Telegram: ${err.message}`);
