@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 
+function parsePriorityTranslation(text = '') {
+  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const idIndex = lines.findIndex((line) => /^id\s*:/i.test(line));
+  if (idIndex === -1) return { priority: '', original: text || '(no text)' };
+
+  const priority = lines[idIndex].replace(/^id\s*:/i, '').trim();
+  const original = lines.filter((_, index) => index !== idIndex).join('\n').trim();
+  return {
+    priority,
+    original: original || '(translation only)',
+  };
+}
+
 export default function Home() {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState([]);
@@ -91,13 +104,25 @@ export default function Home() {
             const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
             const canEmbed = item.channel && item.postId;
             const isOpen = !!openEmbeds[key];
+            const parsed = parsePriorityTranslation(item.text || '');
             return (
               <article key={key} className="post">
                 <div className="postHeader">
                   <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
                   <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
                 </div>
-                <p className="postText">{item.text || '(no text)'}</p>
+                {parsed.priority ? (
+                  <div className="translationBlock">
+                    <p className="translationLabel">🇮🇩 Indonesian (prioritized)</p>
+                    <p className="postText translationText">{parsed.priority}</p>
+                    <details>
+                      <summary>Show original message</summary>
+                      <p className="postText">{parsed.original}</p>
+                    </details>
+                  </div>
+                ) : (
+                  <p className="postText">{parsed.original}</p>
+                )}
                 {canEmbed ? (
                   <div className="postActions">
                     <button className="btn tiny" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))}>
