@@ -7,6 +7,7 @@ import { sendMessage, isConnectionHealthy, getConnectionState, getCurrentSocket 
 import { buildPayload } from './messageFormatter.js';
 import { initForwardedStore, buildForwardKey, hasForwarded, markForwarded } from './forwardedStore.js';
 import { translateToIndonesian, appendTranslation } from './translator.js';
+import { storeForwardPreview } from './previewStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -263,6 +264,19 @@ async function forwardMessage(telegramClient, whatsappSock, message, targetId, c
                 success = true;
 
                 logger.info(`Message id=${message.id} forwarded to WhatsApp successfully (type: ${mediaType}, media: ${filePath ? 'yes' : 'no'})`);
+                const postId = message.id ? String(message.id) : null;
+                const channelMatch = sourceLink ? sourceLink.match(/t\.me\/([^/]+)\/(\d+)/) : null;
+                await storeForwardPreview({
+                    messageKey: forwardKey,
+                    messageId: message.id,
+                    channelTitle,
+                    channel: channelMatch?.[1] || '',
+                    postId: channelMatch?.[2] || postId,
+                    text: payload.text || payload.rawText || '',
+                    sourceLink,
+                    mediaType,
+                    createdAt: new Date().toISOString(),
+                });
                 
             } catch (err) {
                 retryCount++;
