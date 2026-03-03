@@ -11,7 +11,10 @@
     "logs:pm2": "pm2 logs tg-wa-forwarder tg-wa-translator",
     "list-chats": "node src/listChats.js",
     "follow-channel": "node src/followChannel.js",
-    "test": "echo \"No tests defined\" && exit 0"
+    "test": "echo \"No tests defined\" && exit 0",
+    "dashboard:dev": "npm --prefix dashboard run dev",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "dashboard:start": "npm --prefix dashboard run start"
   },
   "repository": {
     "type": "git",
