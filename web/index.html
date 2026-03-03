@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forward Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="botName">Forward Bot</h1>
+    <div class="actions">
+      <button id="infoBtn">Info</button>
+      <button id="themeBtn">Toggle Theme</button>
+      <button id="adminBtn">Admin</button>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>Channels</h2>
+      <div id="channels" class="chips"></div>
+    </section>
+
+    <section>
+      <h2>Live Telegram Preview</h2>
+      <p class="muted">Auto-refresh every 10 seconds from Upstash KV/Redis.</p>
+      <div id="feed" class="feed"></div>
+    </section>
+  </main>
+
+  <dialog id="infoDialog">
+    <h3 id="infoTitle"></h3>
+    <p id="infoContent"></p>
+    <p id="infoContact" class="muted"></p>
+    <button onclick="document.getElementById('infoDialog').close()">Close</button>
+  </dialog>
+
+  <dialog id="adminDialog">
+    <div id="adminLogin">
+      <h3>Admin Login</h3>
+      <input id="adminUser" placeholder="Username" value="admin" />
+      <input id="adminPass" placeholder="Password" type="password" />
+      <button id="loginSubmit">Login</button>
+    </div>
+    <div id="adminPanel" hidden>
+      <h3>Admin Panel</h3>
+      <textarea id="settingsJson" rows="14"></textarea>
+      <button id="saveSettings">Save Settings JSON</button>
+    </div>
+  </dialog>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
