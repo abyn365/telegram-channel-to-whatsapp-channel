@@ -1,3 +1,4 @@
+import Head from 'next/head';
 import { useEffect, useMemo, useState } from 'react';
 
 const REFRESH_SECONDS = 10;
@@ -14,6 +15,10 @@ function formatTime(dateString) {
   return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
 }
 
+function getItemType(item) {
+  return (item.previewType || item.mediaType || 'text').toLowerCase();
+}
+
 export default function Home() {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState([]);
@@ -27,6 +32,9 @@ export default function Home() {
   const [channelFilter, setChannelFilter] = useState('all');
   const [mediaFilter, setMediaFilter] = useState('all');
   const [compactMode, setCompactMode] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const storedTheme = typeof window !== 'undefined' ? localStorage.getItem('dashboardTheme') : null;
@@ -44,33 +52,55 @@ export default function Home() {
     localStorage.setItem('dashboardCompactMode', compactMode ? '1' : '0');
   }, [compactMode]);
 
-  async function loadInitial() {
-    const [settingsRes, channelsRes, cardsRes] = await Promise.all([
-      fetch('/api/public/settings').then((r) => r.json()),
-      fetch('/api/public/channels').then((r) => r.json()),
-      fetch('/api/public/cards?limit=50').then((r) => r.json()),
-    ]);
-
+  async function fetchAllCards() {
+    const cardsRes = await fetch('/api/public/cards?limit=50').then((r) => r.json());
     const cards = cardsRes.cards || [];
-    setSettings(settingsRes);
-    setChannels(channelsRes.channels || []);
     setItems(cards);
     setLastSeen(cards[0]?.createdAt || null);
-    setLastUpdateAt(new Date());
-    setRefreshIn(REFRESH_SECONDS);
   }
 
-  async function refresh() {
-    const since = lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : '';
-    const deltaRes = await fetch(`/api/public/cards?limit=50${since}`).then((r) => r.json());
-    if (deltaRes.cards?.length) {
-      const fullRes = await fetch('/api/public/cards?limit=50').then((r) => r.json());
-      const next = fullRes.cards || [];
-      setItems(next);
-      setLastSeen(next[0]?.createdAt || null);
+  async function loadInitial() {
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const [settingsRes, channelsRes] = await Promise.all([
+        fetch('/api/public/settings').then((r) => r.json()),
+        fetch('/api/public/channels').then((r) => r.json()),
+      ]);
+
+      await fetchAllCards();
+
+      setSettings(settingsRes);
+      setChannels(channelsRes.channels || []);
+      setLastUpdateAt(new Date());
+      setRefreshIn(REFRESH_SECONDS);
+    } catch (loadError) {
+      setError('Unable to load dashboard data. Please retry in a few seconds.');
+    } finally {
+      setIsLoading(false);
     }
-    setLastUpdateAt(new Date());
-    setRefreshIn(REFRESH_SECONDS);
+  }
+
+  async function refresh({ forced = false } = {}) {
+    if (isRefreshing) return;
+
+    setIsRefreshing(true);
+    setError('');
+
+    try {
+      const since = lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : '';
+      const deltaRes = await fetch(`/api/public/cards?limit=50${since}`).then((r) => r.json());
+      if (forced || deltaRes.cards?.length) {
+        await fetchAllCards();
+      }
+      setLastUpdateAt(new Date());
+      setRefreshIn(REFRESH_SECONDS);
+    } catch (refreshError) {
+      setError('Auto refresh failed. Data may be stale until the next successful fetch.');
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -78,7 +108,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const refreshTimer = setInterval(refresh, REFRESH_SECONDS * 1000);
+    const refreshTimer = setInterval(() => {
+      refresh();
+    }, REFRESH_SECONDS * 1000);
+
     const countdownTimer = setInterval(() => {
       setRefreshIn((value) => (value <= 1 ? REFRESH_SECONDS : value - 1));
     }, 1000);
@@ -87,10 +120,10 @@ export default function Home() {
       clearInterval(refreshTimer);
       clearInterval(countdownTimer);
     };
-  }, [lastSeen]);
+  }, [lastSeen, isRefreshing]);
 
   const mediaOptions = useMemo(() => {
-    const all = new Set(items.map((item) => (item.previewType || item.mediaType || 'text').toLowerCase()));
+    const all = new Set(items.map((item) => getItemType(item)));
     return ['all', ...Array.from(all)];
   }, [items]);
 
@@ -99,7 +132,7 @@ export default function Home() {
     return items.filter((item) => {
       const channelName = (item.channelTitle || item.channel || '').toLowerCase();
       const text = (item.caption || item.text || '').toLowerCase();
-      const type = (item.previewType || item.mediaType || 'text').toLowerCase();
+      const type = getItemType(item);
       const channelMatch = channelFilter === 'all' || channelName === channelFilter.toLowerCase();
       const mediaMatch = mediaFilter === 'all' || type === mediaFilter;
       const textMatch = !term || text.includes(term) || channelName.includes(term);
@@ -109,10 +142,11 @@ export default function Home() {
 
   const stats = useMemo(() => {
     const mediaBreakdown = items.reduce((acc, item) => {
-      const type = (item.previewType || item.mediaType || 'text').toLowerCase();
+      const type = getItemType(item);
       acc[type] = (acc[type] || 0) + 1;
       return acc;
     }, {});
+
     const topMedia = Object.entries(mediaBreakdown).sort((a, b) => b[1] - a[1])[0];
 
     return {
@@ -123,106 +157,154 @@ export default function Home() {
     };
   }, [items, filteredItems.length, channels.length]);
 
+  const latestItem = items[0];
+
   return (
-    <main className="wrap">
-      <header className="hero card">
-        <div>
-          <p className="badge">Live Forwarding Dashboard</p>
-          <h1>{settings?.botName || 'Forward Bot'}</h1>
-          <p className="muted">{settings?.infoContent || 'Live forwarded feed with production-focused monitoring.'}</p>
-          <div className="statusRow">
-            <span className="statusPill">Auto refresh in {refreshIn}s</span>
-            <span className="statusPill">Updated {lastUpdateAt ? lastUpdateAt.toLocaleTimeString() : '-'}</span>
-            <span className="statusPill">Items {stats.totalItems}</span>
-            <span className="statusPill">Visible {stats.visibleItems}</span>
+    <>
+      <Head>
+        <title>{settings?.botName ? `${settings.botName} Dashboard` : 'Forwarding Dashboard'}</title>
+      </Head>
+      <main className="wrap">
+        <header className="hero card">
+          <div>
+            <p className="badge">Live Forwarding Dashboard</p>
+            <h1>{settings?.botName || 'Forward Bot'}</h1>
+            <p className="muted">{settings?.infoContent || 'Live forwarded feed with production-focused monitoring.'}</p>
+            <div className="statusRow">
+              <span className="statusPill">Auto refresh in {refreshIn}s</span>
+              <span className="statusPill">Updated {lastUpdateAt ? lastUpdateAt.toLocaleTimeString() : '-'}</span>
+              <span className="statusPill">Items {stats.totalItems}</span>
+              <span className="statusPill">Visible {stats.visibleItems}</span>
+            </div>
           </div>
-        </div>
-        <div className="heroActions">
-          <button className="btn secondary" onClick={() => setTheme((value) => (value === 'dark' ? 'light' : 'dark'))}>
-            Theme: {theme}
-          </button>
-          <button className="btn secondary" onClick={() => setCompactMode((value) => !value)}>
-            {compactMode ? 'Comfort mode' : 'Compact mode'}
-          </button>
-        </div>
-      </header>
+          <div className="heroActions">
+            <button className="btn secondary" onClick={() => refresh({ forced: true })} disabled={isRefreshing}>
+              {isRefreshing ? 'Refreshing…' : 'Refresh now'}
+            </button>
+            <button className="btn secondary" onClick={() => setTheme((value) => (value === 'dark' ? 'light' : 'dark'))}>
+              Theme: {theme}
+            </button>
+            <button className="btn secondary" onClick={() => setCompactMode((value) => !value)}>
+              {compactMode ? 'Comfort mode' : 'Compact mode'}
+            </button>
+          </div>
+        </header>
 
-      <section className="statsGrid">
-        <article className="card statCard">
-          <p className="muted">Active channels</p>
-          <h3>{stats.channels}</h3>
-        </article>
-        <article className="card statCard">
-          <p className="muted">Top media type</p>
-          <h3>{stats.topMedia}</h3>
-        </article>
-      </section>
+        {error ? <p className="errorBanner">{error}</p> : null}
 
-      <section className="card">
-        <div className="sectionHeader">
-          <h2>Filters</h2>
-          <button className="btn tiny secondary" onClick={() => { setSearch(''); setChannelFilter('all'); setMediaFilter('all'); }}>
-            Reset
-          </button>
-        </div>
-        <div className="filtersGrid">
-          <label>
-            Search
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search text or channel" />
-          </label>
-          <label>
-            Channel
-            <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)}>
-              <option value="all">All channels</option>
-              {channels.map((channel) => <option key={channel} value={channel}>{channel}</option>)}
-            </select>
-          </label>
-          <label>
-            Media
-            <select value={mediaFilter} onChange={(e) => setMediaFilter(e.target.value)}>
-              {mediaOptions.map((media) => <option key={media} value={media}>{media === 'all' ? 'All types' : media.toUpperCase()}</option>)}
-            </select>
-          </label>
-        </div>
-      </section>
+        <section className="statsGrid statsGridExtended">
+          <article className="card statCard">
+            <p className="muted">Active channels</p>
+            <h3>{stats.channels}</h3>
+          </article>
+          <article className="card statCard">
+            <p className="muted">Top media type</p>
+            <h3>{stats.topMedia}</h3>
+          </article>
+          <article className="card statCard">
+            <p className="muted">Latest channel</p>
+            <h3>{latestItem?.channelTitle || latestItem?.channel || 'n/a'}</h3>
+          </article>
+          <article className="card statCard">
+            <p className="muted">Latest event</p>
+            <h3>{latestItem ? formatTime(latestItem.createdAt) : '-'}</h3>
+          </article>
+        </section>
 
-      <section className="card">
-        <h2>Tracked Channels</h2>
-        <div className="chips">{channels.length ? channels.map((value) => <span key={value}>{value}</span>) : <span>No channels configured.</span>}</div>
-      </section>
+        <section className="card">
+          <div className="sectionHeader">
+            <h2>Smart Filters</h2>
+            <button
+              className="btn tiny secondary"
+              onClick={() => {
+                setSearch('');
+                setChannelFilter('all');
+                setMediaFilter('all');
+              }}
+            >
+              Reset
+            </button>
+          </div>
+          <div className="filtersGrid">
+            <label>
+              Search
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search text or channel" />
+            </label>
+            <label>
+              Channel
+              <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)}>
+                <option value="all">All channels</option>
+                {channels.map((channel) => (
+                  <option key={channel} value={channel}>
+                    {channel}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Media
+              <select value={mediaFilter} onChange={(e) => setMediaFilter(e.target.value)}>
+                {mediaOptions.map((media) => (
+                  <option key={media} value={media}>
+                    {media === 'all' ? 'All types' : media.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
 
-      <section className="card">
-        <h2>Forwarded Feed</h2>
-        <div className={`feed ${compactMode ? 'compact' : ''}`}>
-          {filteredItems.map((item) => {
-            const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
-            const canEmbed = item.embed?.channel && item.embed?.postId;
-            return (
-              <article className="post" key={key}>
-                <div className="postHeader">
-                  <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
-                  <span className="muted">{formatTime(item.createdAt)}</span>
-                </div>
-                <div className="metaRow">
-                  <span className="mediaBadge">{(item.previewType || item.mediaType || 'text').toUpperCase()}</span>
-                  {item.sourceLink ? <a className="link" href={item.sourceLink} target="_blank" rel="noreferrer">Source</a> : null}
-                </div>
-                <p className="postText">{formatPreview(item.caption || item.text, compactMode ? 140 : 240)}</p>
-                {canEmbed ? (
-                  <button className="btn tiny" onClick={() => setOpenEmbeds((current) => ({ ...current, [key]: !current[key] }))}>
-                    {openEmbeds[key] ? 'Hide embed' : 'Show embed'}
-                  </button>
-                ) : <p className="muted small">Embed unavailable for this item.</p>}
-                {canEmbed && openEmbeds[key] ? (
-                  <div className="embedWrap">
-                    <iframe src={`https://t.me/${item.embed.channel}/${item.embed.postId}?embed=1&mode=tme`} title={key} loading="lazy" />
+        <section className="card">
+          <h2>Tracked Channels</h2>
+          <div className="chips">
+            {channels.length ? channels.map((value) => <span key={value}>{value}</span>) : <span>No channels configured.</span>}
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="sectionHeader">
+            <h2>Forwarded Feed</h2>
+            <span className="muted small">Newest 50 events</span>
+          </div>
+          {isLoading ? <p className="muted">Loading feed…</p> : null}
+          {!isLoading && !filteredItems.length ? <p className="muted">No items match the current filters.</p> : null}
+          <div className={`feed ${compactMode ? 'compact' : ''}`}>
+            {filteredItems.map((item) => {
+              const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
+              const canEmbed = item.embed?.channel && item.embed?.postId;
+              return (
+                <article className="post" key={key}>
+                  <div className="postHeader">
+                    <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
+                    <span className="muted">{formatTime(item.createdAt)}</span>
                   </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    </main>
+                  <div className="metaRow">
+                    <span className="mediaBadge">{getItemType(item).toUpperCase()}</span>
+                    {item.sourceLink ? (
+                      <a className="link" href={item.sourceLink} target="_blank" rel="noreferrer">
+                        Source
+                      </a>
+                    ) : null}
+                  </div>
+                  <p className="postText">{formatPreview(item.caption || item.text, compactMode ? 140 : 240)}</p>
+                  {canEmbed ? (
+                    <button className="btn tiny" onClick={() => setOpenEmbeds((current) => ({ ...current, [key]: !current[key] }))}>
+                      {openEmbeds[key] ? 'Hide embed' : 'Show embed'}
+                    </button>
+                  ) : (
+                    <p className="muted small">Embed unavailable for this item.</p>
+                  )}
+                  {canEmbed && openEmbeds[key] ? (
+                    <div className="embedWrap">
+                      <iframe src={`https://t.me/${item.embed.channel}/${item.embed.postId}?embed=1&mode=tme`} title={key} loading="lazy" />
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      </main>
+    </>
   );
 }
