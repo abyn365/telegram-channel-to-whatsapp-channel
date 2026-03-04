@@ -210,12 +210,11 @@ export default function Home() {
       <Head>
         <title>{settings?.botName ? `${settings.botName} Dashboard` : 'Forwarding Dashboard'}</title>
       </Head>
-      <div className="backgroundCanvas" aria-hidden="true">
-        <div style={{ width: '1080px', height: '1080px', position: 'relative' }}>
+      <div className="pageShell">
+        <div className="backgroundCanvas" aria-hidden="true">
           <Squares speed={0.5} squareSize={40} direction="diagonal" borderColor="#999" hoverFillColor="#222" />
         </div>
-      </div>
-      <main className="wrap">
+        <main className="wrap">
         <header className="hero card">
           <div>
             <p className="badge">Live Forwarding Dashboard</p>
@@ -382,7 +381,8 @@ export default function Home() {
             </div>
           ) : null}
         </section>
-      </main>
+        </main>
+      </div>
     </>
   );
 }

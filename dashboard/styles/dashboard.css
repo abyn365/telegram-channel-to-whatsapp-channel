@@ -33,24 +33,28 @@ body {
   color: var(--text);
 }
 
+.pageShell {
+  position: relative;
+  min-height: 100vh;
+}
+
 .backgroundCanvas {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
   pointer-events: none;
-  opacity: 0.7;
+  opacity: 0.55;
+  overflow: hidden;
 }
 
 .squaresBackground {
   width: 100%;
   height: 100%;
-  position: relative;
-  background-color: rgba(0, 0, 0, 0.35);
+  min-height: 100%;
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.22);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.03);
 }
 
 .squaresBackground::before,
@@ -70,8 +74,8 @@ body {
 
 .squaresBackground::after {
   background:
-    radial-gradient(circle at 25% 30%, color-mix(in srgb, var(--sq-hover) 45%, transparent), transparent 35%),
-    radial-gradient(circle at 75% 60%, color-mix(in srgb, #fff 16%, transparent), transparent 40%);
+    radial-gradient(circle at 25% 30%, color-mix(in srgb, var(--sq-hover) 32%, transparent), transparent 35%),
+    radial-gradient(circle at 75% 60%, color-mix(in srgb, #fff 10%, transparent), transparent 42%);
   mix-blend-mode: normal;
 }
 
@@ -107,7 +111,7 @@ body {
 }
 
 .card {
-  background: transparent;
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
   border: 1px solid var(--line);
   padding: 1rem;
   border-radius: 14px;
@@ -159,7 +163,7 @@ body {
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn.secondary {
-  background: color-mix(in srgb, var(--soft) 45%, transparent);
+  background: color-mix(in srgb, var(--soft) 70%, transparent);
   border: 1px solid var(--line);
   color: var(--text);
   box-shadow: none;
@@ -240,7 +244,7 @@ label { display: grid; gap: 0.35rem; font-size: 0.9rem; }
 .feed.compact { gap: 0.65rem; }
 
 .post {
-  background: transparent;
+  background: color-mix(in srgb, var(--panel-2) 58%, transparent);
   border: 1px solid var(--line);
   padding: 0.85rem;
   border-radius: 12px;
@@ -370,6 +374,11 @@ select:focus {
 }
 
 @media (max-width: 760px) {
+  .wrap { padding: 0.75rem; }
   .hero { flex-direction: column; align-items: flex-start; }
-  .embedWrap iframe { min-height: 340px; }
+  .card { padding: 0.8rem; border-radius: 12px; }
+  .hero h1 { font-size: 1.45rem; }
+  .statusRow { gap: 0.35rem; }
+  .statusPill { font-size: 0.72rem; padding: 0.18rem 0.45rem; }
+  .embedWrap iframe { min-height: 260px; }
 }

@@ -33,7 +33,7 @@ body{
 }
 .wrap{max-width:1120px;margin:0 auto;padding:1.2rem}
 .card{
-  background:transparent;
+  background:color-mix(in srgb,var(--panel) 62%, transparent);
   border:1px solid var(--line);
   padding:1.1rem;
   border-radius:18px;
@@ -77,8 +77,8 @@ body{
 }
 
 .feed{display:grid;gap:.9rem}
-.post{background:rgba(0,0,0,.12);border:1px solid var(--line);padding:.95rem;border-radius:14px}
-.waLikeCard{background:transparent}
+.post{background:color-mix(in srgb,var(--panel-2) 60%, transparent);border:1px solid var(--line);padding:.95rem;border-radius:14px}
+.waLikeCard{background:color-mix(in srgb,var(--panel) 50%, transparent)}
 .postHeader{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
 .postText{white-space:pre-wrap;line-height:1.48;margin:.3rem 0}
 .translationBlock{margin-top:.2rem;padding:.75rem;border-radius:12px;background:var(--translation);border:1px solid var(--translation-line)}
@@ -118,7 +118,9 @@ input[type='color']{height:42px;padding:.2rem}
 .templateRow{display:grid;grid-template-columns:1.4fr .8fr auto;gap:.5rem;align-items:center}
 
 @media (max-width:760px){
+  .wrap{padding:.75rem}
   .hero,.topbar{flex-direction:column;align-items:flex-start}
-  .embedWrap iframe{min-height:360px}
+  .card{padding:.8rem;border-radius:12px}
+  .embedWrap iframe{min-height:260px}
   .templateRow{grid-template-columns:1fr}
 }
