@@ -5,7 +5,14 @@ const REFRESH_SECONDS = 10;
 const PAGE_SIZE = 50;
 
 function formatPreview(text = '', max = 220) {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[\t\f\v]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+$/g, ''))
+    .join('\n')
+    .trim();
   if (!normalized) return '(no text)';
   return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized;
 }
@@ -310,7 +317,14 @@ export default function Home() {
             {filteredItems.map((item) => {
               const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
               const canEmbed = item.embed?.channel && item.embed?.postId;
-              const fullPreview = String(item.caption || item.text || '').replace(/\s+/g, ' ').trim();
+              const fullPreview = String(item.caption || item.text || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/[\t\f\v]+/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .split('\n')
+                .map((line) => line.replace(/\s+$/g, ''))
+                .join('\n')
+                .trim();
               const previewLimit = compactMode ? 140 : 240;
               const isLongPreview = fullPreview.length > previewLimit;
               const isExpanded = !!expandedItems[key];
