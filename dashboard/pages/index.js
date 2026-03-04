@@ -1,5 +1,6 @@
 import Head from 'next/head';
 import { useEffect, useMemo, useState } from 'react';
+import Squares from '../components/Squares';
 
 const REFRESH_SECONDS = 10;
 const PAGE_SIZE = 50;
@@ -209,6 +210,11 @@ export default function Home() {
       <Head>
         <title>{settings?.botName ? `${settings.botName} Dashboard` : 'Forwarding Dashboard'}</title>
       </Head>
+      <div className="backgroundCanvas" aria-hidden="true">
+        <div style={{ width: '1080px', height: '1080px', position: 'relative' }}>
+          <Squares speed={0.5} squareSize={40} direction="diagonal" borderColor="#999" hoverFillColor="#222" />
+        </div>
+      </div>
       <main className="wrap">
         <header className="hero card">
           <div>
