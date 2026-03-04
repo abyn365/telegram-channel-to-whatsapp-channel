@@ -242,7 +242,7 @@ export default function Home() {
 
         {error ? <p className="errorBanner">{error}</p> : null}
 
-        <section className="statsGrid statsGridExtended">
+        <section className="statsGrid statsGridExtended mobileStatsRow">
           <article className="card statCard">
             <p className="muted">Active channels</p>
             <h3>{stats.channels}</h3>
@@ -261,7 +261,7 @@ export default function Home() {
           </article>
         </section>
 
-        <section className="card">
+        <section className="card filtersSection">
           <div className="sectionHeader">
             <h2>Smart Filters</h2>
             <button
@@ -304,14 +304,14 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="card">
+        <section className="card trackedChannelsSection">
           <h2>Tracked Channels</h2>
           <div className="chips">
             {channels.length ? channels.map((value) => <span key={value}>{value}</span>) : <span>No channels configured.</span>}
           </div>
         </section>
 
-        <section className="card">
+        <section className="card feedSection">
           <div className="sectionHeader">
             <h2>Forwarded Feed</h2>
             <span className="muted small">Newest 50 events</span>

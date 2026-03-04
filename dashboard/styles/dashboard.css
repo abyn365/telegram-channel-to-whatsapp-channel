@@ -361,6 +361,16 @@ select:focus {
 
 .adminWrap { max-width: 980px; }
 
+.mobileStatsRow {
+  align-items: stretch;
+}
+
+.filtersSection,
+.trackedChannelsSection,
+.feedSection {
+  scroll-margin-top: 0.75rem;
+}
+
 @media (max-width: 1000px) {
   .statsGridExtended { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -381,4 +391,33 @@ select:focus {
   .statusRow { gap: 0.35rem; }
   .statusPill { font-size: 0.72rem; padding: 0.18rem 0.45rem; }
   .embedWrap iframe { min-height: 260px; }
+
+  .filtersSection,
+  .trackedChannelsSection {
+    display: none;
+  }
+
+  .mobileStatsRow {
+    grid-template-columns: repeat(4, minmax(132px, 1fr));
+    gap: 0.55rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobileStatsRow .statCard {
+    margin-bottom: 0;
+  }
+
+  .mobileStatsRow .statCard p {
+    font-size: 0.74rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .mobileStatsRow .statCard h3 {
+    font-size: 0.92rem;
+    line-height: 1.25;
+    margin: 0;
+    word-break: break-word;
+  }
 }
