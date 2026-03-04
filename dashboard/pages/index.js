@@ -28,6 +28,22 @@ function getItemType(item) {
   return (item.previewType || item.mediaType || 'text').toLowerCase();
 }
 
+function normalizeChannel(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const withoutProtocol = raw
+    .replace(/^https?:\/\//i, '')
+    .replace(/^telegram\.me\//i, '')
+    .replace(/^t\.me\//i, '');
+
+  const withoutQuery = withoutProtocol.split('?')[0].split('#')[0];
+  const trimmedPath = withoutQuery.replace(/^@/, '').replace(/^\/+/, '');
+  const firstSegment = trimmedPath.split('/')[0];
+
+  return firstSegment.trim().toLowerCase();
+}
+
 export default function Home() {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState([]);
@@ -173,13 +189,46 @@ export default function Home() {
     return ['all', ...Array.from(all)];
   }, [items]);
 
+  const channelOptions = useMemo(() => {
+    const counts = new Map();
+
+    items.forEach((item) => {
+      const key = normalizeChannel(item.channel || item.channelTitle);
+      if (!key) return;
+      const current = counts.get(key) || { value: key, label: item.channel || item.channelTitle || key, count: 0 };
+      current.count += 1;
+      if (!current.label || current.label === key) {
+        current.label = item.channel || item.channelTitle || key;
+      }
+      counts.set(key, current);
+    });
+
+    channels.forEach((channel) => {
+      const key = normalizeChannel(channel);
+      if (!key) return;
+      const current = counts.get(key) || { value: key, label: channel, count: 0 };
+      if (!current.label || current.label === key) current.label = channel;
+      counts.set(key, current);
+    });
+
+    return Array.from(counts.values())
+      .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+  }, [items, channels]);
+
   const filteredItems = useMemo(() => {
     const term = search.trim().toLowerCase();
     return items.filter((item) => {
       const channelName = (item.channelTitle || item.channel || '').toLowerCase();
+      const normalizedFilter = normalizeChannel(channelFilter);
+      const itemChannel = normalizeChannel(item.channel);
+      const itemChannelTitle = normalizeChannel(item.channelTitle);
+      const itemSourceChannel = normalizeChannel(item.embed?.channel);
       const text = (item.caption || item.text || '').toLowerCase();
       const type = getItemType(item);
-      const channelMatch = channelFilter === 'all' || channelName === channelFilter.toLowerCase();
+      const channelMatch = channelFilter === 'all'
+        || itemChannel === normalizedFilter
+        || itemChannelTitle === normalizedFilter
+        || itemSourceChannel === normalizedFilter;
       const mediaMatch = mediaFilter === 'all' || type === mediaFilter;
       const textMatch = !term || text.includes(term) || channelName.includes(term);
       return channelMatch && mediaMatch && textMatch;
@@ -204,6 +253,9 @@ export default function Home() {
   }, [items, filteredItems.length, channels.length]);
 
   const latestItem = items[0];
+  const squareStyle = theme === 'light'
+    ? { borderColor: '#8f9bb8', hoverFillColor: '#dbe4ff' }
+    : { borderColor: '#999', hoverFillColor: '#222' };
 
   return (
     <>
@@ -212,7 +264,7 @@ export default function Home() {
       </Head>
       <div className="pageShell">
         <div className="backgroundCanvas" aria-hidden="true">
-          <Squares speed={0.5} squareSize={40} direction="diagonal" borderColor="#999" hoverFillColor="#222" />
+          <Squares speed={0.5} squareSize={40} direction="diagonal" borderColor={squareStyle.borderColor} hoverFillColor={squareStyle.hoverFillColor} />
         </div>
         <main className="wrap">
         <header className="hero card">
@@ -284,9 +336,9 @@ export default function Home() {
               Channel
               <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)}>
                 <option value="all">All channels</option>
-                {channels.map((channel) => (
-                  <option key={channel} value={channel}>
-                    {channel}
+                {channelOptions.map((channel) => (
+                  <option key={channel.value} value={channel.value}>
+                    {channel.label} ({channel.count})
                   </option>
                 ))}
               </select>
@@ -302,6 +354,7 @@ export default function Home() {
               </select>
             </label>
           </div>
+          <p className="muted small">Showing {filteredItems.length} of {items.length} items{channelFilter !== 'all' ? ` in ${channelFilter}` : ''}{mediaFilter !== 'all' ? ` · ${mediaFilter.toUpperCase()}` : ''}.</p>
         </section>
 
         <section className="card trackedChannelsSection">

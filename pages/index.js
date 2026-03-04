@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const PREVIEW_LIMIT = 280;
 
@@ -36,6 +36,16 @@ function truncateWithEllipsis(text = '', limit = PREVIEW_LIMIT) {
   return { text: `${safeSlice.trimEnd()}…`, truncated: true };
 }
 
+function timeAgo(value) {
+  const date = new Date(value);
+  const diffSeconds = Math.max(1, Math.floor((Date.now() - date.getTime()) / 1000));
+
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m ago`;
+  if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h ago`;
+  return `${Math.floor(diffSeconds / 86400)}d ago`;
+}
+
 export default function Home() {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState([]);
@@ -45,6 +55,10 @@ export default function Home() {
   const [theme, setTheme] = useState('dark');
   const [activeChannel, setActiveChannel] = useState('all');
   const [expandedPosts, setExpandedPosts] = useState({});
+  const [query, setQuery] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [status, setStatus] = useState('');
+  const lastSeenRef = useRef(null);
 
   useEffect(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem('dashboardTheme') : null;
@@ -66,38 +80,66 @@ export default function Home() {
   }, [theme, settings]);
 
   const loadInitial = async () => {
-    const [settingsRes, channelsRes, forwardsRes] = await Promise.all([
-      fetch('/api/public/settings'),
-      fetch('/api/public/channels'),
-      fetch('/api/public/forwards?limit=40'),
-    ]);
+    setIsRefreshing(true);
+    setStatus('Loading latest updates...');
 
-    const settingsData = await settingsRes.json();
-    const channelsData = await channelsRes.json();
-    const forwardsData = await forwardsRes.json();
+    try {
+      const [settingsRes, channelsRes, forwardsRes] = await Promise.all([
+        fetch('/api/public/settings'),
+        fetch('/api/public/channels'),
+        fetch('/api/public/forwards?limit=40'),
+      ]);
 
-    setSettings(settingsData);
-    setChannels(channelsData.channels || []);
-    setItems(forwardsData.items || []);
-    if (forwardsData.items?.[0]?.createdAt) setLastSeen(forwardsData.items[0].createdAt);
+      const settingsData = await settingsRes.json();
+      const channelsData = await channelsRes.json();
+      const forwardsData = await forwardsRes.json();
+
+      setSettings(settingsData);
+      setChannels(channelsData.channels || []);
+      setItems(forwardsData.items || []);
+      const latest = forwardsData.items?.[0]?.createdAt || null;
+      setLastSeen(latest);
+      lastSeenRef.current = latest;
+      setStatus(latest ? `Synced ${timeAgo(latest)}` : 'No updates yet.');
+    } catch (error) {
+      setStatus('Could not load feed right now.');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
-  const refresh = async () => {
-    const since = lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : '';
-    const res = await fetch(`/api/public/forwards?limit=40${since}`);
-    const data = await res.json();
-    if (!data.items?.length) return;
+  const refresh = async (forceFull = false) => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
 
-    const full = await (await fetch('/api/public/forwards?limit=40')).json();
-    setItems(full.items || []);
-    setLastSeen(full.items?.[0]?.createdAt || null);
+    try {
+      const since = !forceFull && lastSeenRef.current ? `&since=${encodeURIComponent(lastSeenRef.current)}` : '';
+      const res = await fetch(`/api/public/forwards?limit=40${since}`);
+      const data = await res.json();
+
+      if (!data.items?.length && !forceFull) {
+        setStatus(`Up to date · ${lastSeenRef.current ? timeAgo(lastSeenRef.current) : 'just now'}`);
+        return;
+      }
+
+      const full = forceFull ? data : await (await fetch('/api/public/forwards?limit=40')).json();
+      const latest = full.items?.[0]?.createdAt || null;
+      setItems(full.items || []);
+      setLastSeen(latest);
+      lastSeenRef.current = latest;
+      setStatus(latest ? `Updated ${timeAgo(latest)}` : 'Feed refreshed.');
+    } catch (error) {
+      setStatus('Refresh failed. Retrying automatically...');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   useEffect(() => {
     loadInitial();
-    const timer = setInterval(refresh, 10000);
+    const timer = setInterval(() => refresh(false), 10000);
     return () => clearInterval(timer);
-  }, [lastSeen]);
+  }, []);
 
   const normalizedChannels = useMemo(() => {
     const channelSet = new Set(channels.map((ch) => String(ch || '').toLowerCase()));
@@ -108,10 +150,29 @@ export default function Home() {
   }, [channels, items]);
 
   const rows = useMemo(() => {
-    const list = items || [];
-    if (activeChannel === 'all') return list;
-    return list.filter((item) => String(item.channel || '').toLowerCase() === activeChannel);
-  }, [items, activeChannel]);
+    const q = query.trim().toLowerCase();
+    return (items || []).filter((item) => {
+      if (activeChannel !== 'all' && String(item.channel || '').toLowerCase() !== activeChannel) {
+        return false;
+      }
+
+      if (!q) return true;
+
+      const parsed = splitTranslatedCaption(item.text || '');
+      const haystack = [item.channel, item.channelTitle, parsed.original, parsed.translated].join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [items, activeChannel, query]);
+
+  const stats = useMemo(() => {
+    const now = Date.now();
+    const recent = items.filter((item) => now - new Date(item.createdAt).getTime() < 24 * 3600 * 1000).length;
+    return [
+      { label: 'Total posts', value: items.length },
+      { label: 'Channels', value: normalizedChannels.length - 1 },
+      { label: 'Last 24h', value: recent },
+    ];
+  }, [items, normalizedChannels]);
 
   const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
@@ -124,13 +185,34 @@ export default function Home() {
           <p className="muted">{settings?.ui?.heroSubtitle || settings?.infoContent || 'Forwarded updates from Telegram channels.'}</p>
         </div>
         <div className="heroActions">
-          <button className="btn secondary" onClick={toggleTheme}>Theme: {theme}</button>
+          <button className="btn secondary" onClick={() => refresh(true)} type="button">{isRefreshing ? 'Refreshing...' : 'Refresh now'}</button>
+          <button className="btn secondary" onClick={toggleTheme} type="button">Theme: {theme}</button>
           <a href="/admin" className="btn">Admin</a>
         </div>
       </header>
 
-      <section className="card">
-        <h2>{settings?.infoTitle || 'Channels'}</h2>
+      <section className="quickStats">
+        {stats.map((card) => (
+          <article className="card statCard" key={card.label}>
+            <p className="muted">{card.label}</p>
+            <strong>{card.value}</strong>
+          </article>
+        ))}
+      </section>
+
+      <section className="card toolbarCard">
+        <div>
+          <h2>{settings?.infoTitle || 'Channels'}</h2>
+          <p className="muted">Filter by channel and search text in both original and translated content.</p>
+        </div>
+        <label className="searchField">
+          <span className="muted">Search feed</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search channel, original text, translation..."
+          />
+        </label>
         <div className="chips channelFilter">
           {normalizedChannels.map((ch) => (
             <button
@@ -146,8 +228,10 @@ export default function Home() {
       </section>
 
       <section className="card">
-        <h2>{settings?.ui?.feedTitle || 'Forwarded Feed'}</h2>
-        <p className="muted">{settings?.ui?.feedHint || 'Auto-refresh every 10 seconds. Indonesian translation is shown first when available.'}</p>
+        <div className="feedHeader">
+          <h2>{settings?.ui?.feedTitle || 'Forwarded Feed'}</h2>
+          <p className="muted statusText">{status || settings?.ui?.feedHint || 'Auto-refresh every 10 seconds. Indonesian translation is shown first when available.'}</p>
+        </div>
         <div className="feed">
           {rows.map((item) => {
             const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
@@ -163,7 +247,7 @@ export default function Home() {
               <article key={key} className="post waLikeCard">
                 <div className="postHeader">
                   <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
-                  <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
+                  <span className="muted" title={new Date(item.createdAt).toLocaleString()}>{timeAgo(item.createdAt)}</span>
                 </div>
 
                 <button
@@ -192,7 +276,7 @@ export default function Home() {
 
                 {canEmbed ? (
                   <div className="postActions">
-                    <button className="btn tiny secondary" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))}>
+                    <button className="btn tiny secondary" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))} type="button">
                       {isOpen ? 'Hide source embed' : 'Show source embed'}
                     </button>
                     {item.sourceLink ? <a className="link" href={item.sourceLink} target="_blank" rel="noreferrer">Open source</a> : null}
@@ -212,7 +296,7 @@ export default function Home() {
               </article>
             );
           })}
-          {!rows.length ? <p className="muted">No items for this channel yet.</p> : null}
+          {!rows.length ? <p className="muted">No matching items. Try another channel or clear the search.</p> : null}
         </div>
       </section>
 
