@@ -36,8 +36,10 @@ export async function setSettings(value) {
   return value;
 }
 
-export async function getForwards(limit = 40, since = null) {
-  const rows = await cmd('lrange', 'dashboard:forwards', 0, Math.min(limit, 100) - 1) || [];
+export async function getForwards(limit = 40, since = null, offset = 0) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 40, 1), 100);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const rows = await cmd('lrange', 'dashboard:forwards', safeOffset, safeOffset + safeLimit - 1) || [];
   const parsed = rows.map((r) => { try { return JSON.parse(r); } catch { return null; } }).filter(Boolean);
   return since ? parsed.filter((x) => x.createdAt > since) : parsed;
 }
