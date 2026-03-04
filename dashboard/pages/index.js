@@ -204,6 +204,9 @@ export default function Home() {
   }, [items, filteredItems.length, channels.length]);
 
   const latestItem = items[0];
+  const squareStyle = theme === 'light'
+    ? { borderColor: '#8f9bb8', hoverFillColor: '#dbe4ff' }
+    : { borderColor: '#999', hoverFillColor: '#222' };
 
   return (
     <>
@@ -212,7 +215,7 @@ export default function Home() {
       </Head>
       <div className="pageShell">
         <div className="backgroundCanvas" aria-hidden="true">
-          <Squares speed={0.5} squareSize={40} direction="diagonal" borderColor="#999" hoverFillColor="#222" />
+          <Squares speed={0.5} squareSize={40} direction="diagonal" borderColor={squareStyle.borderColor} hoverFillColor={squareStyle.hoverFillColor} />
         </div>
         <main className="wrap">
         <header className="hero card">
