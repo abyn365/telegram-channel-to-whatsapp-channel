@@ -2,6 +2,7 @@ import Head from 'next/head';
 import { useEffect, useMemo, useState } from 'react';
 
 const REFRESH_SECONDS = 10;
+const PAGE_SIZE = 50;
 
 function formatPreview(text = '', max = 220) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
@@ -35,6 +36,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [expandedItems, setExpandedItems] = useState({});
+  const [hasMoreItems, setHasMoreItems] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
 
   useEffect(() => {
     const storedTheme = typeof window !== 'undefined' ? localStorage.getItem('dashboardTheme') : null;
@@ -52,11 +56,11 @@ export default function Home() {
     localStorage.setItem('dashboardCompactMode', compactMode ? '1' : '0');
   }, [compactMode]);
 
-  async function fetchAllCards() {
-    const cardsRes = await fetch('/api/public/cards?limit=50').then((r) => r.json());
-    const cards = cardsRes.cards || [];
-    setItems(cards);
-    setLastSeen(cards[0]?.createdAt || null);
+  async function fetchCards({ limit = PAGE_SIZE, offset = 0, since = '' } = {}) {
+    const search = new URLSearchParams({ limit: String(limit) });
+    if (offset > 0) search.set('offset', String(offset));
+    if (since) search.set('since', since);
+    return fetch(`/api/public/cards?${search.toString()}`).then((r) => r.json());
   }
 
   async function loadInitial() {
@@ -69,7 +73,11 @@ export default function Home() {
         fetch('/api/public/channels').then((r) => r.json()),
       ]);
 
-      await fetchAllCards();
+      const cardsRes = await fetchCards({ limit: PAGE_SIZE });
+      const cards = cardsRes.cards || [];
+      setItems(cards);
+      setLastSeen(cards[0]?.createdAt || null);
+      setHasMoreItems(Boolean(cardsRes.hasMore));
 
       setSettings(settingsRes);
       setChannels(channelsRes.channels || []);
@@ -89,10 +97,25 @@ export default function Home() {
     setError('');
 
     try {
-      const since = lastSeen ? `&since=${encodeURIComponent(lastSeen)}` : '';
-      const deltaRes = await fetch(`/api/public/cards?limit=50${since}`).then((r) => r.json());
-      if (forced || deltaRes.cards?.length) {
-        await fetchAllCards();
+      const deltaRes = await fetchCards({ limit: PAGE_SIZE, since: lastSeen || '' });
+      const newCards = deltaRes.cards || [];
+      if (forced || newCards.length) {
+        if (forced) {
+          const latestRes = await fetchCards({ limit: PAGE_SIZE });
+          setItems(latestRes.cards || []);
+          setHasMoreItems(Boolean(latestRes.hasMore));
+          setLastSeen(latestRes.cards?.[0]?.createdAt || null);
+        } else {
+          setItems((current) => {
+            const known = new Set(current.map((item) => item.id || item.messageKey || `${item.createdAt}-${item.messageId}`));
+            const uniqueIncoming = newCards.filter((item) => {
+              const incomingKey = item.id || item.messageKey || `${item.createdAt}-${item.messageId}`;
+              return !known.has(incomingKey);
+            });
+            return uniqueIncoming.length ? [...uniqueIncoming, ...current] : current;
+          });
+          setLastSeen(newCards[0]?.createdAt || lastSeen);
+        }
       }
       setLastUpdateAt(new Date());
       setRefreshIn(REFRESH_SECONDS);
@@ -106,6 +129,21 @@ export default function Home() {
   useEffect(() => {
     loadInitial();
   }, []);
+
+  async function loadOlder() {
+    if (isLoadingOlder || !hasMoreItems) return;
+    setIsLoadingOlder(true);
+    try {
+      const response = await fetchCards({ limit: PAGE_SIZE, offset: items.length });
+      const olderCards = response.cards || [];
+      setItems((current) => [...current, ...olderCards]);
+      setHasMoreItems(Boolean(response.hasMore));
+    } catch {
+      setError('Failed to load older events. Please try again.');
+    } finally {
+      setIsLoadingOlder(false);
+    }
+  }
 
   useEffect(() => {
     const refreshTimer = setInterval(() => {
@@ -272,6 +310,11 @@ export default function Home() {
             {filteredItems.map((item) => {
               const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
               const canEmbed = item.embed?.channel && item.embed?.postId;
+              const fullPreview = String(item.caption || item.text || '').replace(/\s+/g, ' ').trim();
+              const previewLimit = compactMode ? 140 : 240;
+              const isLongPreview = fullPreview.length > previewLimit;
+              const isExpanded = !!expandedItems[key];
+              const previewText = isExpanded ? (fullPreview || '(no text)') : formatPreview(fullPreview, previewLimit);
               return (
                 <article className="post" key={key}>
                   <div className="postHeader">
@@ -286,7 +329,15 @@ export default function Home() {
                       </a>
                     ) : null}
                   </div>
-                  <p className="postText">{formatPreview(item.caption || item.text, compactMode ? 140 : 240)}</p>
+                  <button
+                    className={`previewToggle ${isLongPreview ? '' : 'static'}`}
+                    type="button"
+                    disabled={!isLongPreview}
+                    onClick={() => setExpandedItems((current) => ({ ...current, [key]: !current[key] }))}
+                  >
+                    <p className="postText">{previewText}</p>
+                    {isLongPreview ? <span className="muted small">{isExpanded ? 'Show less' : 'Click to expand'}</span> : null}
+                  </button>
                   {canEmbed ? (
                     <button className="btn tiny" onClick={() => setOpenEmbeds((current) => ({ ...current, [key]: !current[key] }))}>
                       {openEmbeds[key] ? 'Hide embed' : 'Show embed'}
@@ -303,6 +354,13 @@ export default function Home() {
               );
             })}
           </div>
+          {hasMoreItems ? (
+            <div className="loadMoreWrap">
+              <button className="btn secondary" onClick={loadOlder} disabled={isLoadingOlder}>
+                {isLoadingOlder ? 'Loading…' : 'Load older events'}
+              </button>
+            </div>
+          ) : null}
         </section>
       </main>
     </>

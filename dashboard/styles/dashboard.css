@@ -219,8 +219,56 @@ select {
   margin: 0.1rem 0;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: #fff;
-  color: #111;
+  background: color-mix(in srgb, var(--panel-2) 86%, transparent);
+  color: var(--text);
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--muted);
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, #fff);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.previewToggle {
+  width: 100%;
+  margin: 0.55rem 0;
+  padding: 0.65rem;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.previewToggle.static {
+  cursor: default;
+}
+
+.previewToggle:disabled {
+  opacity: 1;
+}
+
+.previewToggle:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--soft) 42%, transparent);
+}
+
+.previewToggle.static:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.loadMoreWrap {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: center;
 }
 
 .gridTwo {
