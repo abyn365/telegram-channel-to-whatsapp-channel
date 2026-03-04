@@ -1,18 +1,39 @@
 import { useEffect, useMemo, useState } from 'react';
 
-function parsePriorityTranslation(text = '') {
-  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
-  const idIndex = lines.findIndex((line) => /^id\s*:/i.test(line));
-  if (idIndex === -1) {
-    return { priority: '', original: text || '(no text)' };
+const PREVIEW_LIMIT = 280;
+
+function splitTranslatedCaption(text = '') {
+  const normalized = String(text || '').trim();
+  if (!normalized) {
+    return { translated: '', original: '(no text)' };
   }
 
-  const priority = lines[idIndex].replace(/^id\s*:/i, '').trim();
-  const original = lines.filter((_, index) => index !== idIndex).join('\n').trim();
+  const marker = /\nid\s*:\s*/i;
+  const match = normalized.match(marker);
+  if (!match || match.index === undefined) {
+    return { translated: '', original: normalized };
+  }
+
+  const original = normalized.slice(0, match.index).trim();
+  const translated = normalized.slice(match.index).replace(/^\nid\s*:\s*/i, '').trim();
+
   return {
-    priority,
+    translated,
     original: original || '(translation only)',
   };
+}
+
+function truncateWithEllipsis(text = '', limit = PREVIEW_LIMIT) {
+  const normalized = String(text || '').trim();
+  if (normalized.length <= limit) {
+    return { text: normalized, truncated: false };
+  }
+
+  const sliced = normalized.slice(0, limit);
+  const breakPoint = Math.max(sliced.lastIndexOf(' '), sliced.lastIndexOf('\n'));
+  const safeSlice = breakPoint > limit * 0.6 ? sliced.slice(0, breakPoint) : sliced;
+
+  return { text: `${safeSlice.trimEnd()}…`, truncated: true };
 }
 
 export default function Home() {
@@ -22,6 +43,8 @@ export default function Home() {
   const [lastSeen, setLastSeen] = useState(null);
   const [openEmbeds, setOpenEmbeds] = useState({});
   const [theme, setTheme] = useState('dark');
+  const [activeChannel, setActiveChannel] = useState('all');
+  const [expandedPosts, setExpandedPosts] = useState({});
 
   useEffect(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem('dashboardTheme') : null;
@@ -76,12 +99,25 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [lastSeen]);
 
-  const rows = useMemo(() => items || [], [items]);
+  const normalizedChannels = useMemo(() => {
+    const channelSet = new Set(channels.map((ch) => String(ch || '').toLowerCase()));
+    items.forEach((item) => {
+      if (item.channel) channelSet.add(String(item.channel).toLowerCase());
+    });
+    return ['all', ...Array.from(channelSet).filter(Boolean)];
+  }, [channels, items]);
+
+  const rows = useMemo(() => {
+    const list = items || [];
+    if (activeChannel === 'all') return list;
+    return list.filter((item) => String(item.channel || '').toLowerCase() === activeChannel);
+  }, [items, activeChannel]);
+
   const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
   return (
     <main className="wrap">
-      <header className="hero card">
+      <header className="hero card glassy">
         <div>
           <p className="badge">{settings?.ui?.badgeText || 'Live Forwarding Dashboard'}</p>
           <h1>{settings?.botName || 'Forward Bot'}</h1>
@@ -95,7 +131,18 @@ export default function Home() {
 
       <section className="card">
         <h2>{settings?.infoTitle || 'Channels'}</h2>
-        <div className="chips">{channels.map((ch) => <span key={ch}>{ch}</span>)}</div>
+        <div className="chips channelFilter">
+          {normalizedChannels.map((ch) => (
+            <button
+              key={ch}
+              className={`filterBtn ${activeChannel === ch ? 'active' : ''}`}
+              onClick={() => setActiveChannel(ch)}
+              type="button"
+            >
+              {ch === 'all' ? 'All channels' : `@${ch}`}
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="card">
@@ -106,34 +153,47 @@ export default function Home() {
             const key = item.messageKey || `${item.createdAt}-${item.messageId}`;
             const canEmbed = item.channel && item.postId;
             const isOpen = !!openEmbeds[key];
-            const parsed = parsePriorityTranslation(item.text || '');
+            const isExpanded = !!expandedPosts[key];
+            const parsed = splitTranslatedCaption(item.text || '');
+            const truncatedOriginal = truncateWithEllipsis(parsed.original);
+            const truncatedTranslation = truncateWithEllipsis(parsed.translated);
+            const shouldOfferExpand = truncatedOriginal.truncated || truncatedTranslation.truncated;
 
             return (
-              <article key={key} className="post">
+              <article key={key} className="post waLikeCard">
                 <div className="postHeader">
                   <strong>{item.channelTitle || item.channel || 'Unknown channel'}</strong>
                   <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
                 </div>
 
-                {parsed.priority ? (
-                  <>
+                <button
+                  className="messagePreview"
+                  type="button"
+                  onClick={() => setExpandedPosts((prev) => ({ ...prev, [key]: !prev[key] }))}
+                >
+                  {parsed.translated ? (
                     <div className="translationBlock">
                       <p className="translationLabel">🇮🇩 Indonesian translation</p>
-                      <p className="postText translationText">{parsed.priority}</p>
+                      <p className="postText translationText">{isExpanded ? parsed.translated : truncatedTranslation.text}</p>
                     </div>
-                    <details className="originalDetails">
-                      <summary>Original message</summary>
-                      <p className="postText">{parsed.original}</p>
-                    </details>
-                  </>
-                ) : (
-                  <p className="postText">{parsed.original}</p>
-                )}
+                  ) : null}
+
+                  <div className="waOriginal">
+                    <p className="translationLabel">Original message</p>
+                    <p className="postText">{isExpanded ? parsed.original : truncatedOriginal.text}</p>
+                  </div>
+
+                  {shouldOfferExpand ? (
+                    <span className="readMore">{isExpanded ? 'Show less' : 'Tap for full details'}</span>
+                  ) : (
+                    <span className="readMore">Tap to collapse/expand</span>
+                  )}
+                </button>
 
                 {canEmbed ? (
                   <div className="postActions">
-                    <button className="btn tiny" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))}>
-                      {isOpen ? 'Hide embed' : 'Show embed'}
+                    <button className="btn tiny secondary" onClick={() => setOpenEmbeds((prev) => ({ ...prev, [key]: !prev[key] }))}>
+                      {isOpen ? 'Hide source embed' : 'Show source embed'}
                     </button>
                     {item.sourceLink ? <a className="link" href={item.sourceLink} target="_blank" rel="noreferrer">Open source</a> : null}
                   </div>
@@ -152,6 +212,7 @@ export default function Home() {
               </article>
             );
           })}
+          {!rows.length ? <p className="muted">No items for this channel yet.</p> : null}
         </div>
       </section>
 
