@@ -1,27 +1,27 @@
 :root {
-  --bg: #04050b;
-  --bg-2: #090b15;
-  --panel: #111523;
-  --panel-2: #171d30;
-  --text: #edf0ff;
-  --muted: #8e99bd;
-  --accent: #7f5bff;
-  --accent-2: #ff4569;
-  --line: #2d3550;
-  --soft: #1c2339;
-  --danger: #ff8b8b;
+  --bg: #000000;
+  --bg-2: #000000;
+  --panel: #000000;
+  --panel-2: #000000;
+  --text: #ffffff;
+  --muted: #cfcfcf;
+  --accent: #ffffff;
+  --accent-2: #ffffff;
+  --line: rgba(255, 255, 255, 0.35);
+  --soft: rgba(255, 255, 255, 0.08);
+  --danger: #ffffff;
 }
 
 :root[data-theme='light'] {
-  --bg: #f4f7ff;
+  --bg: #ffffff;
   --panel: #ffffff;
-  --panel-2: #f7f9ff;
-  --text: #101828;
-  --muted: #667085;
-  --accent: #315efb;
-  --line: #d4ddf1;
-  --soft: #eef3ff;
-  --danger: #b42318;
+  --panel-2: #ffffff;
+  --text: #000000;
+  --muted: #444444;
+  --accent: #000000;
+  --line: rgba(0, 0, 0, 0.3);
+  --soft: rgba(0, 0, 0, 0.06);
+  --danger: #000000;
 }
 
 * { box-sizing: border-box; }
@@ -29,28 +29,32 @@
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: linear-gradient(180deg, #030303, #0f1116 55%, #15171d);
+  background: #000;
   color: var(--text);
 }
 
+.pageShell {
+  position: relative;
+  min-height: 100vh;
+}
+
 .backgroundCanvas {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
   pointer-events: none;
-  opacity: 0.7;
+  opacity: 0.55;
+  overflow: hidden;
 }
 
 .squaresBackground {
   width: 100%;
   height: 100%;
-  position: relative;
-  background-color: rgba(0, 0, 0, 0.35);
+  min-height: 100%;
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.22);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.03);
 }
 
 .squaresBackground::before,
@@ -70,8 +74,8 @@ body {
 
 .squaresBackground::after {
   background:
-    radial-gradient(circle at 25% 30%, color-mix(in srgb, var(--sq-hover) 45%, transparent), transparent 35%),
-    radial-gradient(circle at 75% 60%, color-mix(in srgb, #fff 16%, transparent), transparent 40%);
+    radial-gradient(circle at 25% 30%, color-mix(in srgb, var(--sq-hover) 32%, transparent), transparent 35%),
+    radial-gradient(circle at 75% 60%, color-mix(in srgb, #fff 10%, transparent), transparent 42%);
   mix-blend-mode: normal;
 }
 
@@ -107,7 +111,7 @@ body {
 }
 
 .card {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, #000), var(--panel-2));
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
   border: 1px solid var(--line);
   padding: 1rem;
   border-radius: 14px;
@@ -138,7 +142,7 @@ body {
 .heroActions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
 .btn {
-  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent-2) 40%, var(--accent)) 100%);
+  background:#000;
   color: #fff;
   border: 0;
   padding: 0.55rem 0.95rem;
@@ -159,7 +163,7 @@ body {
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn.secondary {
-  background: color-mix(in srgb, var(--soft) 45%, transparent);
+  background: color-mix(in srgb, var(--soft) 70%, transparent);
   border: 1px solid var(--line);
   color: var(--text);
   box-shadow: none;
@@ -240,7 +244,7 @@ label { display: grid; gap: 0.35rem; font-size: 0.9rem; }
 .feed.compact { gap: 0.65rem; }
 
 .post {
-  background: linear-gradient(170deg, color-mix(in srgb, var(--panel-2) 88%, #000), color-mix(in srgb, var(--panel) 88%, #000));
+  background: color-mix(in srgb, var(--panel-2) 58%, transparent);
   border: 1px solid var(--line);
   padding: 0.85rem;
   border-radius: 12px;
@@ -357,6 +361,16 @@ select:focus {
 
 .adminWrap { max-width: 980px; }
 
+.mobileStatsRow {
+  align-items: stretch;
+}
+
+.filtersSection,
+.trackedChannelsSection,
+.feedSection {
+  scroll-margin-top: 0.75rem;
+}
+
 @media (max-width: 1000px) {
   .statsGridExtended { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -370,6 +384,40 @@ select:focus {
 }
 
 @media (max-width: 760px) {
+  .wrap { padding: 0.75rem; }
   .hero { flex-direction: column; align-items: flex-start; }
-  .embedWrap iframe { min-height: 340px; }
+  .card { padding: 0.8rem; border-radius: 12px; }
+  .hero h1 { font-size: 1.45rem; }
+  .statusRow { gap: 0.35rem; }
+  .statusPill { font-size: 0.72rem; padding: 0.18rem 0.45rem; }
+  .embedWrap iframe { min-height: 260px; }
+
+  .filtersSection,
+  .trackedChannelsSection {
+    display: none;
+  }
+
+  .mobileStatsRow {
+    grid-template-columns: repeat(4, minmax(132px, 1fr));
+    gap: 0.55rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobileStatsRow .statCard {
+    margin-bottom: 0;
+  }
+
+  .mobileStatsRow .statCard p {
+    font-size: 0.74rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .mobileStatsRow .statCard h3 {
+    font-size: 0.92rem;
+    line-height: 1.25;
+    margin: 0;
+    word-break: break-word;
+  }
 }

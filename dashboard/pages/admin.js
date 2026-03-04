@@ -166,78 +166,87 @@ export default function Admin() {
             <button className="btn" onClick={login} disabled={busy}>Login</button>
           </article>
 
-          <article className="card">
-            <h2>Rotate Password</h2>
-            <p className="muted small">Use 12+ characters with letters, numbers, and symbols.</p>
-            <input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" />
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password" autoComplete="new-password" />
-            <button className="btn secondary" onClick={rotatePassword} disabled={busy || !token}>Update Password</button>
-          </article>
+          {token ? (
+            <article className="card">
+              <h2>Rotate Password</h2>
+              <p className="muted small">Use 12+ characters with letters, numbers, and symbols.</p>
+              <input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" />
+              <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password" autoComplete="new-password" />
+              <button className="btn secondary" onClick={rotatePassword} disabled={busy || !token}>Update Password</button>
+            </article>
+          ) : (
+            <article className="card">
+              <h2>Admin Access Required</h2>
+              <p className="muted small">Log in first to reveal dashboard settings and password management controls.</p>
+            </article>
+          )}
         </section>
 
-        <section className="card">
-          <div className="sectionHeader">
-            <h2>Dashboard Settings</h2>
-            <button className="btn" onClick={saveSettings} disabled={busy || !token}>Save Settings</button>
-          </div>
+        {token ? (
+          <section className="card">
+            <div className="sectionHeader">
+              <h2>Dashboard Settings</h2>
+              <button className="btn" onClick={saveSettings} disabled={busy || !token}>Save Settings</button>
+            </div>
 
-          <section className="formGrid">
+            <section className="formGrid">
+              <label>
+                Bot Name
+                <input
+                  value={settings.botName || ''}
+                  onChange={(e) => setSettings((current) => ({ ...current, botName: e.target.value }))}
+                  placeholder="Forward Bot"
+                />
+              </label>
+
+              <label>
+                Contact
+                <input
+                  value={settings.contact || ''}
+                  onChange={(e) => setSettings((current) => ({ ...current, contact: e.target.value }))}
+                  placeholder="admin@example.com"
+                />
+              </label>
+
+              <label>
+                Theme
+                <select value={settings.theme || 'dark'} onChange={(e) => setSettings((current) => ({ ...current, theme: e.target.value }))}>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </label>
+
+              <label>
+                Info Title
+                <input
+                  value={settings.infoTitle || ''}
+                  onChange={(e) => setSettings((current) => ({ ...current, infoTitle: e.target.value }))}
+                  placeholder="Sources & Admin Info"
+                />
+              </label>
+            </section>
+
             <label>
-              Bot Name
-              <input
-                value={settings.botName || ''}
-                onChange={(e) => setSettings((current) => ({ ...current, botName: e.target.value }))}
-                placeholder="Forward Bot"
+              Info Content
+              <textarea
+                rows={4}
+                value={settings.infoContent || ''}
+                onChange={(e) => setSettings((current) => ({ ...current, infoContent: e.target.value }))}
+                placeholder="Live forwarded feed"
               />
             </label>
 
             <label>
-              Contact
-              <input
-                value={settings.contact || ''}
-                onChange={(e) => setSettings((current) => ({ ...current, contact: e.target.value }))}
-                placeholder="admin@example.com"
-              />
-            </label>
-
-            <label>
-              Theme
-              <select value={settings.theme || 'dark'} onChange={(e) => setSettings((current) => ({ ...current, theme: e.target.value }))}>
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-            </label>
-
-            <label>
-              Info Title
-              <input
-                value={settings.infoTitle || ''}
-                onChange={(e) => setSettings((current) => ({ ...current, infoTitle: e.target.value }))}
-                placeholder="Sources & Admin Info"
+              Embed Templates (one per line as channel/postId)
+              <textarea
+                rows={6}
+                value={templatesText}
+                onChange={(e) => setTemplatesText(e.target.value)}
+                placeholder="wfwitness/74427"
               />
             </label>
           </section>
-
-          <label>
-            Info Content
-            <textarea
-              rows={4}
-              value={settings.infoContent || ''}
-              onChange={(e) => setSettings((current) => ({ ...current, infoContent: e.target.value }))}
-              placeholder="Live forwarded feed"
-            />
-          </label>
-
-          <label>
-            Embed Templates (one per line as channel/postId)
-            <textarea
-              rows={6}
-              value={templatesText}
-              onChange={(e) => setTemplatesText(e.target.value)}
-              placeholder="wfwitness/74427"
-            />
-          </label>
-        </section>
+        ) : null}
       </main>
     </>
   );
