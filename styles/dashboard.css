@@ -42,6 +42,7 @@ body{
   margin-bottom:1rem;
   box-shadow:0 14px 35px rgba(0,0,0,.2);
 }
+.glassy{backdrop-filter: blur(8px)}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem}
 .hero{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
 .hero h1,h1{margin:.1rem 0 .2rem;font-size:2rem;letter-spacing:.02em}
@@ -50,7 +51,7 @@ body{
 .btn{
   background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 70%, #ffffff));
   color:#fff;border:0;padding:.55rem .95rem;border-radius:10px;cursor:pointer;text-decoration:none;display:inline-block;
-  transition:transform .15s ease, box-shadow .15s ease;
+  transition:transform .15s ease, box-shadow .15s ease, opacity .15s ease;
 }
 .btn:hover{transform:translateY(-1px);box-shadow:0 10px 18px color-mix(in srgb,var(--accent) 35%, transparent)}
 .btn.secondary{background:transparent;border:1px solid var(--line);color:var(--text);box-shadow:none}
@@ -58,16 +59,49 @@ body{
 .muted{color:var(--muted)}
 .chips{display:flex;gap:.45rem;flex-wrap:wrap}
 .chips span{background:rgba(109,136,255,.14);border:1px solid var(--line);padding:.25rem .65rem;border-radius:999px}
+
+.channelFilter{display:flex;gap:.6rem;flex-wrap:wrap}
+.filterBtn{
+  border:1px solid var(--line);
+  background:color-mix(in srgb,var(--panel) 78%, transparent);
+  color:var(--text);
+  border-radius:999px;
+  padding:.4rem .82rem;
+  cursor:pointer;
+  transition:all .18s ease;
+}
+.filterBtn:hover{border-color:color-mix(in srgb,var(--accent) 55%, var(--line));transform:translateY(-1px)}
+.filterBtn.active{
+  background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 75%, #fff));
+  border-color:transparent;
+  color:#fff;
+  box-shadow:0 8px 18px color-mix(in srgb,var(--accent) 35%, transparent);
+}
+
 .feed{display:grid;gap:.9rem}
 .post{background:rgba(0,0,0,.12);border:1px solid var(--line);padding:.95rem;border-radius:14px}
+.waLikeCard{background:linear-gradient(180deg, color-mix(in srgb,var(--panel) 80%, #0b111e), color-mix(in srgb,var(--panel-2) 85%, #111827))}
 .postHeader{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
 .postText{white-space:pre-wrap;line-height:1.48;margin:.3rem 0}
-.translationBlock{margin-top:.5rem;padding:.75rem;border-radius:12px;background:var(--translation);border:1px solid var(--translation-line)}
+.translationBlock{margin-top:.2rem;padding:.75rem;border-radius:12px;background:var(--translation);border:1px solid var(--translation-line)}
 .translationLabel{font-size:.78rem;font-weight:700;letter-spacing:.05em;margin:0 0 .3rem;color:#8be7af;text-transform:uppercase}
 .translationText{font-size:1.02rem;font-weight:600}
-.originalDetails{margin-top:.45rem}
-details summary{cursor:pointer;color:var(--accent);font-size:.9rem}
-.postActions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin-top:.45rem}
+
+.messagePreview{
+  margin-top:.65rem;
+  width:100%;
+  text-align:left;
+  border:1px solid color-mix(in srgb,var(--line) 80%, transparent);
+  background:color-mix(in srgb,var(--panel) 70%, #0d1528);
+  border-radius:14px;
+  padding:.75rem;
+  cursor:pointer;
+  color:inherit;
+}
+.waOriginal{margin-top:.55rem;padding:.65rem;border-radius:12px;background:rgba(0,0,0,.13);border:1px solid var(--line)}
+.readMore{display:inline-block;margin-top:.45rem;color:var(--accent);font-size:.85rem;font-weight:600}
+
+.postActions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin-top:.6rem}
 .link{color:var(--accent);text-decoration:none}
 .link:hover{text-decoration:underline}
 .embedWrap{margin-top:.75rem;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
@@ -81,6 +115,7 @@ textarea,input,select{
   width:100%;padding:.62rem .7rem;margin:0;border-radius:10px;
   border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--text);
 }
+textarea:focus,input:focus,select:focus{outline:1px solid color-mix(in srgb,var(--accent) 50%, #fff)}
 input[type='color']{height:42px;padding:.2rem}
 .templateRow{display:grid;grid-template-columns:1.4fr .8fr auto;gap:.5rem;align-items:center}
 
