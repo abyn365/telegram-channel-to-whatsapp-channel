@@ -28,6 +28,13 @@ function getItemType(item) {
   return (item.previewType || item.mediaType || 'text').toLowerCase();
 }
 
+function normalizeChannel(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/^@/, '')
+    .toLowerCase();
+}
+
 export default function Home() {
   const [settings, setSettings] = useState(null);
   const [channels, setChannels] = useState([]);
@@ -177,9 +184,12 @@ export default function Home() {
     const term = search.trim().toLowerCase();
     return items.filter((item) => {
       const channelName = (item.channelTitle || item.channel || '').toLowerCase();
+      const normalizedFilter = normalizeChannel(channelFilter);
+      const itemChannel = normalizeChannel(item.channel);
+      const itemChannelTitle = normalizeChannel(item.channelTitle);
       const text = (item.caption || item.text || '').toLowerCase();
       const type = getItemType(item);
-      const channelMatch = channelFilter === 'all' || channelName === channelFilter.toLowerCase();
+      const channelMatch = channelFilter === 'all' || itemChannel === normalizedFilter || itemChannelTitle === normalizedFilter;
       const mediaMatch = mediaFilter === 'all' || type === mediaFilter;
       const textMatch = !term || text.includes(term) || channelName.includes(term);
       return channelMatch && mediaMatch && textMatch;
@@ -287,11 +297,14 @@ export default function Home() {
               Channel
               <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)}>
                 <option value="all">All channels</option>
-                {channels.map((channel) => (
-                  <option key={channel} value={channel}>
-                    {channel}
-                  </option>
-                ))}
+                {channels.map((channel) => {
+                  const normalized = normalizeChannel(channel);
+                  return (
+                    <option key={channel} value={normalized}>
+                      {channel}
+                    </option>
+                  );
+                })}
               </select>
             </label>
             <label>

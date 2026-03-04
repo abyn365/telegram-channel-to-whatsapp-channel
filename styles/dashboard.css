@@ -9,7 +9,10 @@
   --line: rgba(155, 173, 255, 0.23);
   --translation: rgba(21, 33, 68, 0.75);
   --translation-line: rgba(132, 173, 255, 0.45);
+  --card-shadow: 0 18px 50px rgba(8, 12, 30, 0.25);
+  --btn-shadow: 0 12px 20px color-mix(in srgb, var(--accent) 30%, transparent);
 }
+
 
 :root[data-theme='light'] {
   --bg: #f1f5ff;
@@ -21,7 +24,10 @@
   --line: rgba(74, 97, 158, 0.2);
   --translation: rgba(238, 244, 255, 0.95);
   --translation-line: rgba(103, 139, 226, 0.38);
+  --card-shadow: none;
+  --btn-shadow: none;
 }
+
 
 * { box-sizing: border-box }
 
@@ -44,7 +50,7 @@ body {
   padding: 1.1rem;
   border-radius: 20px;
   margin-bottom: 1rem;
-  box-shadow: 0 18px 50px rgba(8, 12, 30, 0.25);
+  box-shadow: var(--card-shadow);
 }
 
 .glassy { backdrop-filter: blur(14px) saturate(110%) }
@@ -79,7 +85,7 @@ h1 { margin: .12rem 0 .25rem; font-size: clamp(1.6rem, 4.1vw, 2.45rem); letter-s
   display: inline-block;
   font-weight: 600;
   transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
-  box-shadow: 0 12px 20px color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: var(--btn-shadow);
 }
 
 .btn:hover { transform: translateY(-1px) }
