@@ -17,8 +17,10 @@ function mapCard(item) {
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   try {
-    const items = await getForwards(Number(req.query.limit || 40), req.query.since || null);
-    return res.status(200).json({ cards: items.map(mapCard) });
+    const limit = Number(req.query.limit || 40);
+    const offset = Number(req.query.offset || 0);
+    const items = await getForwards(limit, req.query.since || null, offset);
+    return res.status(200).json({ cards: items.map(mapCard), hasMore: items.length >= Math.min(Math.max(limit || 40, 1), 100) });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
